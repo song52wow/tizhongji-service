@@ -290,43 +290,51 @@ export interface NotificationListQuery {
 }
 ```
 
-### 5.2 weight_records
+### 5.2 weight_records（v2 需求变更）
+
+> **需求变更（v2）**：早上和晚上记录拆分为独立记录，同一天可存在早晨记录和晚上记录各一条，若二者同时存在则计算差值。
 
 ```sql
 CREATE TABLE IF NOT EXISTS weight_records (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
   date TEXT NOT NULL,
-  morning_weight REAL,
-  evening_weight REAL,
+  period TEXT NOT NULL CHECK(period IN ('morning', 'evening')),
+  weight REAL NOT NULL,
   note TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  UNIQUE(user_id, date)
+  UNIQUE(user_id, date, period)
 );
 
 CREATE INDEX IF NOT EXISTS idx_weight_records_user_date ON weight_records(user_id, date);
 ```
 
-TypeScript 类型：
+**注意**：v2 需求实施后，`weight_records` 表将使用 `period` + `weight` 单字段设计，原有的 `morning_weight` + `evening_weight` 共存方案废弃。请参考 `docs/weight-tracker.md` 中的原始设计说明。
+
+TypeScript 类型（v2）：
 
 ```ts
 export interface WeightRecord {
   id: string;
   userId: string;
-  date: string;
-  morningWeight?: number;
-  eveningWeight?: number;
+  date: string;        // YYYY-MM-DD
+  period: 'morning' | 'evening';
+  weight: number;      // kg，精确到 0.1
   note?: string;
   createdAt: string;
   updatedAt: string;
 }
 
+export interface WeightRecordWithDiff extends WeightRecord {
+  weightDiff?: number; // eveningWeight - morningWeight，仅当同日存在早晚两条记录时返回
+}
+
 export interface CreateWeightRecordInput {
   userId: string;
   date: string;
-  morningWeight?: number;
-  eveningWeight?: number;
+  period: 'morning' | 'evening';
+  weight: number;
   note?: string;
 }
 
@@ -338,13 +346,139 @@ export interface WeightRecordQuery {
   pageSize?: number;
 }
 
+export interface DailyWeightRecord {
+  date: string;
+  morningRecord?: WeightRecord;
+  eveningRecord?: WeightRecord;
+  weightDiff?: number; // eveningRecord.weight - morningRecord.weight，保留 1 位小数
+}
+
 export interface WeightStats {
   avgMorningWeight: number | null;
   avgEveningWeight: number | null;
   minWeight: number | null;
   maxWeight: number | null;
   change: number | null;
+  avgWeightDiff: number | null;  // v2 新增：早晚体重差值平均值
 }
+```
+
+### 5.2.1 v2 API 设计变更
+
+#### 创建体重记录（v2）
+
+```
+POST /weight-records
+```
+
+请求体：
+
+```json
+{
+  "date": "2026-05-03",
+  "period": "morning",
+  "weight": 70.2,
+  "note": "空腹"
+}
+```
+
+- `period` 必填，可选 `morning` 或 `evening`
+- 同一用户同一天同一时段只能有一条记录
+- 已存在该时段记录时执行更新
+
+响应（v2）：
+
+```json
+{
+  "id": "uuid",
+  "userId": "default_user",
+  "date": "2026-05-03",
+  "period": "morning",
+  "weight": 70.2,
+  "note": "空腹",
+  "createdAt": "2026-05-03T00:00:00.000Z",
+  "updatedAt": "2026-05-03T00:00:00.000Z"
+}
+```
+
+#### 查询体重记录列表（v2）
+
+```
+GET /weight-records?startDate=2026-05-01&endDate=2026-05-03&page=1&pageSize=20
+```
+
+响应（v2）：
+
+```json
+{
+  "items": [
+    {
+      "date": "2026-05-03",
+      "morningRecord": { "id": "uuid1", "period": "morning", "weight": 70.2, "note": "空腹" },
+      "eveningRecord": { "id": "uuid2", "period": "evening", "weight": 71.0, "note": "晚饭后" },
+      "weightDiff": 0.8
+    }
+  ],
+  "total": 1,
+  "page": 1,
+  "pageSize": 20
+}
+```
+
+- `weightDiff = eveningWeight - morningWeight`，保留 1 位小数
+- 若某日只有早或只有晚记录，`weightDiff` 为 `null`
+- 列表按日期 `ASC` 排序
+
+#### 新增：获取每日体重对比（v2）
+
+```
+GET /weight-records/daily?startDate=2026-05-01&endDate=2026-05-03
+```
+
+专门用于获取按日期聚合的早晚体重对比数据：
+
+响应：
+
+```json
+{
+  "items": [
+    {
+      "date": "2026-05-03",
+      "morningRecord": { "id": "...", "period": "morning", "weight": 70.2, "note": "空腹" },
+      "eveningRecord": { "id": "...", "period": "evening", "weight": 71.0, "note": "晚饭后" },
+      "weightDiff": 0.8
+    },
+    {
+      "date": "2026-05-02",
+      "morningRecord": { "id": "...", "period": "morning", "weight": 70.0 },
+      "eveningRecord": null,
+      "weightDiff": null
+    }
+  ],
+  "total": 2
+}
+```
+
+#### 统计接口变更（v2）
+
+```
+GET /weight-records/stats?startDate=2026-05-01&endDate=2026-05-03
+```
+
+响应新增 `avgWeightDiff` 字段：
+
+```json
+{
+  "avgMorningWeight": 70.1,
+  "avgEveningWeight": 70.8,
+  "minWeight": 69.9,
+  "maxWeight": 71.2,
+  "change": 0.8,
+  "avgWeightDiff": 0.7
+}
+```
+
+- `avgWeightDiff`：统计日期范围内所有有效体重差值的平均值，仅当同日同时存在早晚记录时计入
 ```
 
 分页通用类型：
@@ -371,6 +505,8 @@ export interface ErrorResponse {
 ```
 
 ## 6. API 设计
+
+> **说明**：本节描述当前实现的 API。v2 需求（早上/晚上拆分为独立记录）变更正在实施中，请参见第 5.2 节的 v2 设计说明。
 
 所有业务 API 都要求请求头：
 
@@ -403,77 +539,91 @@ Content-Type: application/json
 
 状态码为 `400`。
 
-### 6.1 创建或更新体重记录
+### 6.1 创建或更新体重记录（v2 待实施）
+
+> 当前实现使用 `morningWeight`/`eveningWeight` 共存设计，v2 需求将其拆分为 `period` + `weight` 独立记录。
 
 ```http
 POST /weight-records
 ```
 
-请求体：
+请求体（v2）：
 
 ```json
 {
   "date": "2026-05-03",
-  "morningWeight": 70.2,
-  "eveningWeight": 71.0,
-  "note": "运动后"
+  "period": "morning",
+  "weight": 70.2,
+  "note": "空腹"
 }
 ```
 
 行为：
 
 - 后端以 `X-User-Id` 为准，忽略 body 中的 `userId`。
-- 同一用户同一天只能有一条记录。
-- 已存在记录时执行更新，不存在时创建。
-- 创建和更新都返回完整 `WeightRecord`。
+- `period` 必填，可选 `morning` 或 `evening`。
+- 同一用户同一天同一时段只能有一条记录。
+- 已存在该时段记录时执行更新，不存在时创建。
 
-响应：
+响应（v2）：
 
 ```json
 {
   "id": "uuid",
   "userId": "default_user",
   "date": "2026-05-03",
-  "morningWeight": 70.2,
-  "eveningWeight": 71,
-  "note": "运动后",
+  "period": "morning",
+  "weight": 70.2,
+  "note": "空腹",
   "createdAt": "2026-05-03T00:00:00.000Z",
   "updatedAt": "2026-05-03T00:00:00.000Z"
 }
 ```
 
-### 6.2 查询体重记录列表
+### 6.2 查询体重记录列表（v2 待实施）
+
+> 当前实现返回 `WeightRecord[]`，v2 需求改为返回按日期聚合的 `DailyWeightRecord[]`，并附带 `weightDiff`。
 
 ```http
 GET /weight-records?startDate=2026-05-01&endDate=2026-05-03&page=1&pageSize=20
 ```
 
-行为：
+行为（v2）：
 
 - 后端以 `X-User-Id` 为准，忽略 query 中的 `userId`。
-- 支持 `startDate`、`endDate`、`page`、`pageSize`。
+- 查询同日期的早、晚两条记录，按日期聚合为 `DailyWeightRecord`。
+- `weightDiff = eveningWeight - morningWeight`，保留 1 位小数；若缺早或缺晚则为 `null`。
 - 按 `date ASC` 排序。
 - `page` 默认值为 `1`，最小为 `1`。
 - `pageSize` 默认值为 `20`，最小为 `1`，最大为 `100`。
 
-响应：
+响应（v2）：
 
 ```json
 {
-  "items": [],
-  "total": 0,
+  "items": [
+    {
+      "date": "2026-05-03",
+      "morningRecord": { "id": "uuid1", "period": "morning", "weight": 70.2, "note": "空腹" },
+      "eveningRecord": { "id": "uuid2", "period": "evening", "weight": 71.0, "note": "晚饭后" },
+      "weightDiff": 0.8
+    }
+  ],
+  "total": 1,
   "page": 1,
   "pageSize": 20
 }
 ```
 
-### 6.3 查询体重统计
+### 6.3 查询体重统计（v2 待实施）
+
+> v2 需求在统计响应中新增 `avgWeightDiff` 字段。
 
 ```http
 GET /weight-records/stats?startDate=2026-05-01&endDate=2026-05-03
 ```
 
-响应字段：
+响应（v2）：
 
 ```json
 {
@@ -481,11 +631,12 @@ GET /weight-records/stats?startDate=2026-05-01&endDate=2026-05-03
   "avgEveningWeight": 70.8,
   "minWeight": 69.9,
   "maxWeight": 71.2,
-  "change": 0.8
+  "change": 0.8,
+  "avgWeightDiff": 0.7
 }
 ```
 
-空数据响应：
+空数据响应（v2）：
 
 ```json
 {
@@ -493,11 +644,12 @@ GET /weight-records/stats?startDate=2026-05-01&endDate=2026-05-03
   "avgEveningWeight": null,
   "minWeight": null,
   "maxWeight": null,
-  "change": null
+  "change": null,
+  "avgWeightDiff": null
 }
 ```
 
-统计接口使用 `listAllWeightRecordsForStats` 查询筛选范围内全部记录，不复用带默认分页的 `listWeightRecords`，因此统计超过 20 条记录不受分页影响。
+统计接口使用无 `LIMIT/OFFSET` 的全量查询，不受分页影响。`avgWeightDiff` 仅统计同日期同时存在早晚记录的差值。
 
 ### 6.4 获取单条体重记录
 
@@ -662,7 +814,9 @@ DELETE /notifications/:id
 
 ## 7. 业务规则与校验
 
-### 7.1 体重记录规则
+### 7.1 体重记录规则（v2）
+
+> v2 需求将早上/晚上拆分为独立记录，字段定义变更如下：
 
 体重记录实体 `WeightRecord` 字段规则：
 
@@ -671,32 +825,33 @@ DELETE /notifications/:id
 | `id` | string (UUID) | 是 | 全局唯一标识 |
 | `userId` | string | 是 | 用户ID |
 | `date` | string | 是 | 记录日期，格式 YYYY-MM-DD |
-| `morningWeight` | number | 否 | 早体重（kg），精确到0.1 |
-| `eveningWeight` | number | 否 | 晚体重（kg），精确到0.1 |
-| `note` | string | 否 | 备注（如"锻炼后"），最多200字符 |
+| `period` | string | 是 | 时段：`morning` 或 `evening` |
+| `weight` | number | 是 | 体重（kg），精确到0.1 |
+| `note` | string | 否 | 备注（如"空腹"），最多200字符 |
 | `createdAt` | timestamp | 是 | 创建时间 |
 | `updatedAt` | timestamp | 是 | 更新时间 |
 
-约束规则：
+约束规则（v2）：
 
-- 同一用户同一天只能有一条记录，以 `date + userId` 唯一。
+- 同一用户同一天同一时段只能有一条记录，以 `date + userId + period` 唯一。
+- 同一用户同一天可存在早晨和晚上记录各一条。
+- 若某日同时存在早晚记录，`weightDiff = eveningWeight - morningWeight`。
 - `date` 必须是严格有效的 `YYYY-MM-DD`。
 - `date` 不能超过当前日期。
 - 当前日期使用本地时间生成，不使用 `toISOString().split('T')[0]`，避免中国时区 `00:00~00:59` 被误判为前一天。
-- 早体重和晚体重至少填写一项。
-- 早体重和晚体重均需在 `20.0~300.0 kg` 范围内。
+- 体重需在 `20.0~300.0 kg` 范围内。
 - `NaN`、`Infinity`、`-Infinity` 会被 `Number.isFinite()` 拒绝。
 - `note` 最多 200 字符，保存时会执行 `trim()`。
 
-体重记录错误信息：
+体重记录错误信息（v2）：
 
 | 场景 | HTTP状态码 | 错误信息 |
 |---|---:|---|
-| 早体重超出范围 | 400 | `早体重需在 20.0~300.0 kg 范围内` |
-| 晚体重超出范围 | 400 | `晚体重需在 20.0~300.0 kg 范围内` |
-| 早晚体重均未填 | 400 | `早体重和晚体重至少填写一项` |
+| 体重超出范围 | 400 | `体重需在 20.0~300.0 kg 范围内` |
+| 体重均未填 | 400 | `体重为必填项` |
 | 日期超过今天 | 400 | `日期不能超过当前日期` |
 | 日期格式错误 | 400 | `日期格式不正确，应为 YYYY-MM-DD` |
+| `period` 非法 | 400 | `period 必须是 morning 或 evening` |
 | `startDate` 格式错误 | 400 | `startDate 格式不正确，应为 YYYY-MM-DD` |
 | `endDate` 格式错误 | 400 | `endDate 格式不正确，应为 YYYY-MM-DD` |
 | `startDate` 晚于 `endDate` | 400 | `startDate 不能晚于 endDate` |
@@ -704,9 +859,9 @@ DELETE /notifications/:id
 | 记录不存在或无权访问 | 404 | `体重记录不存在或无权访问` |
 | `userId` 缺失 | 400 | `userId 为必填项` |
 
-### 7.2 体重统计规则
+### 7.2 体重统计规则（v2）
 
-统计字段：
+统计字段（v2 新增 `avgWeightDiff`）：
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
@@ -715,16 +870,16 @@ DELETE /notifications/:id
 | `minWeight` | number \| null | 最低体重 |
 | `maxWeight` | number \| null | 最高体重 |
 | `change` | number \| null | 体重变化量 |
+| `avgWeightDiff` | number \| null | v2 新增：早晚体重差值平均值 |
 
-计算规则：
+计算规则（v2）：
 
 - 所有统计结果保留 1 位小数。
 - 平均值只统计非空值，缺失值不当作 0。
-- 最低/最高体重从早体重和晚体重的全集中计算。
-- 当前实现的 `change` 在记录数 `items.length >= 2` 时计算。
-- 当前实现按日期升序排序后，第一条记录的起始体重取 `first.eveningWeight ?? first.morningWeight`。
-- 当前实现按日期升序排序后，最后一条记录的最新体重取 `last.eveningWeight ?? last.morningWeight`。
-- 若起始体重和最新体重都存在，`change = Math.round((lastWeight - firstWeight) * 10) / 10`。
+- 最低/最高体重从所有体重记录中取。
+- `change` 计算：按日期升序，第一条记录取该日期唯一体重（早权重）或（晚权重），最后一条同理。
+- v2 中 `change` 计算逻辑调整：取第一条记录体重减去最后一条记录体重，`change = Math.round((lastWeight - firstWeight) * 10) / 10`。
+- `avgWeightDiff`：收集所有同日期同时存在早晚记录的差值，计算其平均值；若某日只存在一个时段则不计入；保留 1 位小数。
 - 空数据返回所有字段为 `null`。
 
 ### 7.3 通知规则
@@ -1086,3 +1241,39 @@ npx tsc --noEmit
 - 为生产域名配置 CORS 白名单。
 - 修复 `createNotificationsBatch` 对 `type` 和 `priority` 的校验，使其与 `createNotification` 保持一致。
 - 优化 Flutter 错误提示，避免只抛出泛化错误如 `获取体重记录失败`、`获取统计数据失败`、`删除失败`。
+
+## 11. v2 需求变更：早晚记录拆分
+
+### 变更说明
+
+**需求来源**：用户反馈
+**变更时间**：2026-05-03
+
+**核心变更**：早上和晚上的体重记录拆分为独立记录，不再共存在同一条记录中。若同一天同时存在早、晚两条记录，则计算差值 `weightDiff = eveningWeight - morningWeight`。
+
+### 数据模型变更
+
+| 原字段 | v2 变更 |
+|---|---|
+| `morningWeight`, `eveningWeight` (同一记录) | 拆分为 `period` (`morning`/`evening`) + `weight` 单字段 |
+| `UNIQUE(user_id, date)` | 变更为 `UNIQUE(user_id, date, period)` |
+| 统计 `change` | 逻辑不变（按时间范围首尾体重计算），但需适应单 period 记录 |
+
+### 数据库迁移建议
+
+由于 `weight_records` 表结构发生根本性变化，建议：
+
+1. 新增 `period` 列并迁移数据（将原有记录按 `morningWeight`/`eveningWeight` 拆分为两条）
+2. 或保留旧表，新建 `weight_records_v2` 表，过渡期双写
+3. 迁移完成后删除旧列
+
+### v2 实施检查清单
+
+- [ ] 数据库表结构调整（`period` 字段、`weight` 单字段、`UNIQUE(user_id, date, period)`）
+- [ ] API 请求体/响应体字段变更
+- [ ] 列表查询按日期聚合逻辑（含 `weightDiff` 计算）
+- [ ] 统计接口新增 `avgWeightDiff`
+- [ ] Flutter 客户端模型字段适配
+- [ ] 曲线图同时展示早/晚两条线（`period` 区分）
+- [ ] 数据迁移脚本（如有必要）
+- [ ] 旧单元测试更新 + 新增 v2 用例

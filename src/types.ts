@@ -49,24 +49,30 @@ export interface ErrorResponse {
   statusCode: number;
 }
 
-// ============ Weight Record Types ============
+// ============ Weight Record Types (v2) ============
 
-export interface WeightRecord {
+export type WeightPeriod = 'morning' | 'evening';
+
+export interface DailyWeightRecord {
   id: string;
   userId: string;
   date: string;
-  morningWeight?: number;
-  eveningWeight?: number;
+  period: WeightPeriod;
+  weight: number;
   note?: string;
   createdAt: string;
   updatedAt: string;
 }
 
+export interface WeightRecordWithDiff extends DailyWeightRecord {
+  weightDiff?: number | null;
+}
+
 export interface CreateWeightRecordInput {
   userId: string;
   date: string;
-  morningWeight?: number;
-  eveningWeight?: number;
+  period: WeightPeriod;
+  weight: number;
   note?: string;
 }
 
@@ -76,12 +82,14 @@ export interface WeightRecordQuery {
   endDate?: string;
   page?: number;
   pageSize?: number;
+  period?: WeightPeriod;
 }
 
-export interface WeightStats {
+export interface V2WeightStats {
   avgMorningWeight: number | null;
   avgEveningWeight: number | null;
   minWeight: number | null;
   maxWeight: number | null;
   change: number | null;
+  avgWeightDiff: number | null;
 }

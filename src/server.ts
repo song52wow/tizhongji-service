@@ -1,7 +1,7 @@
 import http, { IncomingMessage, ServerResponse } from 'http';
 import { upsertWeightRecord, listWeightRecords, getWeightRecordById, deleteWeightRecord, calculateWeightStats } from './weight-record';
 import { createNotification, listNotifications, markAsRead, markAllAsRead, deleteNotification, getNotificationById } from './notification';
-import type { CreateWeightRecordInput, WeightRecordQuery, CreateNotificationInput, NotificationListQuery, Notification, WeightRecord } from './types';
+import type { CreateWeightRecordInput, WeightRecordQuery, CreateNotificationInput, NotificationListQuery, Notification, DailyWeightRecord, WeightRecordWithDiff } from './types';
 
 const MAX_BODY_SIZE = 1024 * 100; // 100KB limit
 
@@ -130,6 +130,9 @@ const server = http.createServer(async (req: IncomingMessage, res: ServerRespons
     if (path[0] === 'weight-records' && path.length === 1 && req.method === 'GET') {
       // Force userId from header, ignore query userId
       const safeQuery: WeightRecordQuery = { ...query as unknown as WeightRecordQuery, userId };
+      if (query['period']) {
+        (safeQuery as any).period = query['period'];
+      }
       const result = listWeightRecords(safeQuery);
       if ('success' in result && !result.success) {
         jsonResponse(res, result.statusCode, result);

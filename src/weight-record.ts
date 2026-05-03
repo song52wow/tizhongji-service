@@ -1,9 +1,12 @@
 import { v4 as uuidv4 } from 'uuid';
 import { getDb } from './db';
 import type {
-  WeightRecord,
+  DailyWeightRecord,
+  WeightRecordWithDiff,
   CreateWeightRecordInput,
   WeightRecordQuery,
+  V2WeightStats,
+  WeightPeriod,
   PaginatedResult,
   ErrorResponse,
 } from './types';
@@ -13,6 +16,7 @@ const MAX_WEIGHT = 300.0;
 const MAX_NOTE_LENGTH = 200;
 
 const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+const VALID_PERIODS: WeightPeriod[] = ['morning', 'evening'];
 
 function getLocalDateString(d: Date): string {
   const y = d.getFullYear();
@@ -45,35 +49,28 @@ function validateDateRange(startDate?: string, endDate?: string): ErrorResponse 
   return null;
 }
 
-function toWeightRecord(row: Record<string, unknown>): WeightRecord {
+function toDailyWeightRecord(row: Record<string, unknown>): DailyWeightRecord {
   return {
     id: row['id'] as string,
     userId: row['user_id'] as string,
     date: row['date'] as string,
-    morningWeight: (row['morning_weight'] as number | null) ?? undefined,
-    eveningWeight: (row['evening_weight'] as number | null) ?? undefined,
+    period: row['period'] as WeightPeriod,
+    weight: row['weight'] as number,
     note: (row['note'] as string | null) ?? undefined,
     createdAt: row['created_at'] as string,
     updatedAt: row['updated_at'] as string,
   };
 }
 
-function validateWeightInput(input: CreateWeightRecordInput): ErrorResponse | null {
-  if (input.morningWeight !== undefined && input.morningWeight !== null) {
-    if (!Number.isFinite(input.morningWeight) || input.morningWeight < MIN_WEIGHT || input.morningWeight > MAX_WEIGHT) {
-      return { success: false, error: '早体重需在 20.0~300.0 kg 范围内', statusCode: 400 };
-    }
+function validateInput(input: CreateWeightRecordInput): ErrorResponse | null {
+  if (!input.period || !VALID_PERIODS.includes(input.period)) {
+    return { success: false, error: 'period 必须是 morning 或 evening', statusCode: 400 };
   }
-  if (input.eveningWeight !== undefined && input.eveningWeight !== null) {
-    if (!Number.isFinite(input.eveningWeight) || input.eveningWeight < MIN_WEIGHT || input.eveningWeight > MAX_WEIGHT) {
-      return { success: false, error: '晚体重需在 20.0~300.0 kg 范围内', statusCode: 400 };
-    }
+  if (typeof input.weight !== 'number' || !Number.isFinite(input.weight)) {
+    return { success: false, error: '体重值无效', statusCode: 400 };
   }
-  if (
-    (input.morningWeight === undefined || input.morningWeight === null) &&
-    (input.eveningWeight === undefined || input.eveningWeight === null)
-  ) {
-    return { success: false, error: '早体重和晚体重至少填写一项', statusCode: 400 };
+  if (input.weight < MIN_WEIGHT || input.weight > MAX_WEIGHT) {
+    return { success: false, error: `体重需在 ${MIN_WEIGHT}~${MAX_WEIGHT} kg 范围内`, statusCode: 400 };
   }
   const today = getToday();
   if (input.date > today) {
@@ -88,8 +85,8 @@ function validateWeightInput(input: CreateWeightRecordInput): ErrorResponse | nu
   return null;
 }
 
-export function upsertWeightRecord(input: CreateWeightRecordInput): WeightRecord | ErrorResponse {
-  const validationError = validateWeightInput(input);
+export function upsertWeightRecord(input: CreateWeightRecordInput): DailyWeightRecord | ErrorResponse {
+  const validationError = validateInput(input);
   if (validationError) {
     return validationError;
   }
@@ -104,50 +101,39 @@ export function upsertWeightRecord(input: CreateWeightRecordInput): WeightRecord
   const db = getDb();
   const now = new Date().toISOString();
 
-  // Check if record exists for this user+date
   const existing = db.prepare(
-    'SELECT * FROM weight_records WHERE user_id = ? AND date = ?'
-  ).get(input.userId.trim(), input.date) as Record<string, unknown> | undefined;
+    'SELECT * FROM weight_records WHERE user_id = ? AND date = ? AND period = ?'
+  ).get(input.userId.trim(), input.date, input.period) as Record<string, unknown> | undefined;
 
   if (existing) {
-    // Update existing record
     const updateStmt = db.prepare(`
-      UPDATE weight_records
-      SET morning_weight = ?, evening_weight = ?, note = ?, updated_at = ?
-      WHERE id = ?
+      UPDATE weight_records SET weight = ?, note = ?, updated_at = ? WHERE id = ?
     `);
-    updateStmt.run(
-      input.morningWeight ?? null,
-      input.eveningWeight ?? null,
-      input.note?.trim() ?? null,
-      now,
-      existing['id']
-    );
+    updateStmt.run(input.weight, input.note?.trim() ?? null, now, existing['id']);
     const updated = db.prepare('SELECT * FROM weight_records WHERE id = ?').get(existing['id']) as Record<string, unknown>;
-    return toWeightRecord(updated);
+    return toDailyWeightRecord(updated);
   } else {
-    // Insert new record
     const id = uuidv4();
     const insertStmt = db.prepare(`
-      INSERT INTO weight_records (id, user_id, date, morning_weight, evening_weight, note, created_at, updated_at)
+      INSERT INTO weight_records (id, user_id, date, period, weight, note, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
     insertStmt.run(
       id,
       input.userId.trim(),
       input.date,
-      input.morningWeight ?? null,
-      input.eveningWeight ?? null,
+      input.period,
+      input.weight,
       input.note?.trim() ?? null,
       now,
       now
     );
     const row = db.prepare('SELECT * FROM weight_records WHERE id = ?').get(id) as Record<string, unknown>;
-    return toWeightRecord(row);
+    return toDailyWeightRecord(row);
   }
 }
 
-export function listWeightRecords(query: WeightRecordQuery): PaginatedResult<WeightRecord> | ErrorResponse {
+export function listWeightRecords(query: WeightRecordQuery): PaginatedResult<WeightRecordWithDiff> | ErrorResponse {
   if (!query.userId || typeof query.userId !== 'string' || query.userId.trim() === '') {
     return { success: false, error: 'userId 为必填项', statusCode: 400 };
   }
@@ -159,11 +145,8 @@ export function listWeightRecords(query: WeightRecordQuery): PaginatedResult<Wei
   const offset = (page - 1) * pageSize;
 
   const db = getDb();
-  const conditions: string[] = ['1=1'];
-  const params: (string | number)[] = [];
-
-  conditions.push('user_id = ?');
-  params.push(query.userId.trim());
+  const conditions: string[] = ['user_id = ?'];
+  const params: (string | number)[] = [query.userId.trim()];
 
   if (query.startDate) {
     conditions.push('date >= ?');
@@ -173,21 +156,53 @@ export function listWeightRecords(query: WeightRecordQuery): PaginatedResult<Wei
     conditions.push('date <= ?');
     params.push(query.endDate);
   }
+  if (query.period) {
+    conditions.push('period = ?');
+    params.push(query.period);
+  }
 
   const whereClause = conditions.join(' AND ');
   const countStmt = db.prepare(`SELECT COUNT(*) as count FROM weight_records WHERE ${whereClause}`);
   const total = (countStmt.get(...params) as { count: number }).count;
 
   const selectStmt = db.prepare(
-    `SELECT * FROM weight_records WHERE ${whereClause} ORDER BY date ASC LIMIT ? OFFSET ?`
+    `SELECT * FROM weight_records WHERE ${whereClause} ORDER BY date ASC, period ASC LIMIT ? OFFSET ?`
   );
   const rows = selectStmt.all(...params, pageSize, offset) as Record<string, unknown>[];
-  const items = rows.map(toWeightRecord);
+  const items = rows.map(toDailyWeightRecord);
 
-  return { items, total, page, pageSize };
+  // 计算 weightDiff：如果同一天同时存在 morning 和 evening 记录，则计算差值
+  const itemsWithDiff = computeWeightDiff(items);
+
+  return { items: itemsWithDiff, total, page, pageSize };
 }
 
-export function getWeightRecordById(id: string, userId: string): WeightRecord | ErrorResponse {
+function computeWeightDiff(records: DailyWeightRecord[]): WeightRecordWithDiff[] {
+  // 按日期聚合
+  const byDate = new Map<string, DailyWeightRecord[]>();
+  for (const record of records) {
+    const list = byDate.get(record.date) || [];
+    list.push(record);
+    byDate.set(record.date, list);
+  }
+
+  const result: WeightRecordWithDiff[] = [];
+  for (const record of records) {
+    const dayRecords = byDate.get(record.date) || [];
+    let weightDiff: number | null = null;
+    if (dayRecords.length === 2) {
+      const morning = dayRecords.find(r => r.period === 'morning');
+      const evening = dayRecords.find(r => r.period === 'evening');
+      if (morning && evening) {
+        weightDiff = Math.round((evening.weight - morning.weight) * 10) / 10;
+      }
+    }
+    result.push({ ...record, weightDiff });
+  }
+  return result;
+}
+
+export function getWeightRecordById(id: string, userId: string): DailyWeightRecord | ErrorResponse {
   const db = getDb();
   const row = db.prepare(
     'SELECT * FROM weight_records WHERE id = ? AND user_id = ?'
@@ -195,7 +210,7 @@ export function getWeightRecordById(id: string, userId: string): WeightRecord | 
   if (!row) {
     return { success: false, error: '体重记录不存在或无权访问', statusCode: 404 };
   }
-  return toWeightRecord(row);
+  return toDailyWeightRecord(row);
 }
 
 export function deleteWeightRecord(id: string, userId: string): boolean | ErrorResponse {
@@ -209,18 +224,18 @@ export function deleteWeightRecord(id: string, userId: string): boolean | ErrorR
   return true;
 }
 
-export function calculateWeightStats(query: WeightRecordQuery): { avgMorningWeight: number | null; avgEveningWeight: number | null; minWeight: number | null; maxWeight: number | null; change: number | null } | ErrorResponse {
+export function calculateWeightStats(query: WeightRecordQuery): V2WeightStats | ErrorResponse {
   const records = listAllWeightRecordsForStats(query);
   if ('success' in records && records.success === false) return records;
 
-  const items = records as WeightRecord[];
+  const items = records as DailyWeightRecord[];
 
   if (items.length === 0) {
-    return { avgMorningWeight: null, avgEveningWeight: null, minWeight: null, maxWeight: null, change: null };
+    return { avgMorningWeight: null, avgEveningWeight: null, minWeight: null, maxWeight: null, change: null, avgWeightDiff: null };
   }
 
-  const morningWeights = items.filter(r => r.morningWeight !== undefined).map(r => r.morningWeight as number);
-  const eveningWeights = items.filter(r => r.eveningWeight !== undefined).map(r => r.eveningWeight as number);
+  const morningWeights = items.filter(r => r.period === 'morning').map(r => r.weight);
+  const eveningWeights = items.filter(r => r.period === 'evening').map(r => r.weight);
 
   const avgMorning = morningWeights.length > 0
     ? morningWeights.reduce((a, b) => a + b, 0) / morningWeights.length
@@ -233,15 +248,38 @@ export function calculateWeightStats(query: WeightRecordQuery): { avgMorningWeig
   const min = allWeights.length > 0 ? Math.min(...allWeights) : 0;
   const max = allWeights.length > 0 ? Math.max(...allWeights) : 0;
 
+  // 计算 avgWeightDiff：同一天同时有 morning 和 evening 时计算
+  const weightDiffs: number[] = [];
+  const byDate = new Map<string, DailyWeightRecord[]>();
+  for (const record of items) {
+    const list = byDate.get(record.date) || [];
+    list.push(record);
+    byDate.set(record.date, list);
+  }
+  for (const [, dayRecords] of byDate) {
+    if (dayRecords.length === 2) {
+      const morning = dayRecords.find(r => r.period === 'morning');
+      const evening = dayRecords.find(r => r.period === 'evening');
+      if (morning && evening) {
+        weightDiffs.push(Math.round((evening.weight - morning.weight) * 10) / 10);
+      }
+    }
+  }
+  const avgDiff = weightDiffs.length > 0
+    ? weightDiffs.reduce((a, b) => a + b, 0) / weightDiffs.length
+    : 0;
+
   let change: number | null = null;
-  if (items.length >= 2) {
-    const sorted = [...items].sort((a, b) => a.date.localeCompare(b.date));
+  const sorted = [...items].sort((a, b) => {
+    const dateCmp = a.date.localeCompare(b.date);
+    if (dateCmp !== 0) return dateCmp;
+    return a.period === 'evening' ? 1 : -1;
+  });
+  if (sorted.length >= 2) {
     const first = sorted[0];
     const last = sorted[sorted.length - 1];
-    const firstWeight = first.eveningWeight ?? first.morningWeight;
-    const lastWeight = last.eveningWeight ?? last.morningWeight;
-    if (firstWeight !== undefined && lastWeight !== undefined) {
-      change = Math.round((lastWeight - firstWeight) * 10) / 10;
+    if (first.weight !== undefined && last.weight !== undefined) {
+      change = Math.round((last.weight - first.weight) * 10) / 10;
     }
   }
 
@@ -251,10 +289,11 @@ export function calculateWeightStats(query: WeightRecordQuery): { avgMorningWeig
     minWeight: allWeights.length > 0 ? Math.round(min * 10) / 10 : null,
     maxWeight: allWeights.length > 0 ? Math.round(max * 10) / 10 : null,
     change,
+    avgWeightDiff: weightDiffs.length > 0 ? Math.round(avgDiff * 10) / 10 : null,
   };
 }
 
-function listAllWeightRecordsForStats(query: WeightRecordQuery): WeightRecord[] | ErrorResponse {
+function listAllWeightRecordsForStats(query: WeightRecordQuery): DailyWeightRecord[] | ErrorResponse {
   if (!query.userId || typeof query.userId !== 'string' || query.userId.trim() === '') {
     return { success: false, error: 'userId 为必填项', statusCode: 400 };
   }
@@ -275,8 +314,8 @@ function listAllWeightRecordsForStats(query: WeightRecordQuery): WeightRecord[] 
   }
 
   const rows = db.prepare(
-    `SELECT * FROM weight_records WHERE ${conditions.join(' AND ')} ORDER BY date ASC`
+    `SELECT * FROM weight_records WHERE ${conditions.join(' AND ')} ORDER BY date ASC, period ASC`
   ).all(...params) as Record<string, unknown>[];
 
-  return rows.map(toWeightRecord);
+  return rows.map(toDailyWeightRecord);
 }

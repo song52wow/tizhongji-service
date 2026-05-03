@@ -45,15 +45,16 @@ export function initSchema(database: Database.Database): void {
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
       date TEXT NOT NULL,
-      morning_weight REAL,
-      evening_weight REAL,
+      period TEXT NOT NULL CHECK(period IN ('morning', 'evening')),
+      weight REAL NOT NULL,
       note TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
-      UNIQUE(user_id, date)
+      UNIQUE(user_id, date, period)
     );
 
     CREATE INDEX IF NOT EXISTS idx_weight_records_user_date ON weight_records(user_id, date);
+    CREATE INDEX IF NOT EXISTS idx_weight_records_user_period ON weight_records(user_id, period);
   `);
 }
 
