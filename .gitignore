@@ -1,0 +1,23 @@
+# Node.js
+node_modules/
+*.log
+
+# Build
+dist/
+
+# Test
+coverage/
+
+# Environment
+.env
+.env.local
+
+# IDE
+.idea/
+*.swp
+*.swo
+
+# Database
+*.db
+*.db-shm
+*.db-wal
