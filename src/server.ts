@@ -1,15 +1,65 @@
+// Load .env file if present
+import fs from 'fs';
+import path from 'path';
 import http, { IncomingMessage, ServerResponse } from 'http';
+import crypto from 'crypto';
+import './db'; // Ensure .env is loaded and DB is initialized before other modules
 import { upsertWeightRecord, listWeightRecords, getWeightRecordById, deleteWeightRecord, calculateWeightStats } from './weight-record';
 import { createNotification, listNotifications, markAsRead, markAllAsRead, deleteNotification, getNotificationById } from './notification';
-import type { CreateWeightRecordInput, WeightRecordQuery, CreateNotificationInput, NotificationListQuery, Notification, DailyWeightRecord, WeightRecordWithDiff } from './types';
+import { logger } from './logger';
+import type { CreateWeightRecordInput, WeightRecordQuery, CreateNotificationInput, NotificationListQuery } from './types';
 
-const MAX_BODY_SIZE = 1024 * 100; // 100KB limit
+const envPath = path.join(__dirname, '..', '.env');
+if (fs.existsSync(envPath)) {
+  const envContent = fs.readFileSync(envPath, 'utf-8');
+  for (const line of envContent.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eqIdx = trimmed.indexOf('=');
+    if (eqIdx <= 0) continue;
+    const key = trimmed.slice(0, eqIdx).trim();
+    const value = trimmed.slice(eqIdx + 1).trim();
+    if (key && !process.env[key]) process.env[key] = value;
+  }
+}
+
+const AUTH_SECRET = process.env.AUTH_SECRET || 'dev-secret-change-in-production';
+const MAX_BODY_SIZE = 1024 * 100;
+const PORT = parseInt(process.env.PORT || '3000', 10);
+const START_TIME = Date.now();
+
+// Rate limiting: 100 requests per minute per IP
+const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+const RATE_LIMIT_WINDOW = parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000', 10);
+const RATE_LIMIT_MAX = parseInt(process.env.RATE_LIMIT_MAX || '100', 10);
+
+function checkRateLimit(ip: string): boolean {
+  const now = Date.now();
+  const entry = rateLimitMap.get(ip);
+  if (!entry || now > entry.resetAt) {
+    rateLimitMap.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW });
+    return true;
+  }
+  if (entry.count >= RATE_LIMIT_MAX) {
+    return false;
+  }
+  entry.count++;
+  return true;
+}
+
+// Cleanup old rate limit entries periodically
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of rateLimitMap.entries()) {
+    if (now > entry.resetAt) rateLimitMap.delete(key);
+  }
+}, RATE_LIMIT_WINDOW).unref();
 
 function parseBody<T>(req: http.IncomingMessage, maxSize = MAX_BODY_SIZE): Promise<T> {
   return new Promise((resolve, reject) => {
     let body = '';
     let size = 0;
-    req.on('data', chunk => {
+    req.on('data', (chunk: Buffer) => {
       size += chunk.length;
       if (size > maxSize) {
         reject(new Error('Request body too large'));
@@ -25,44 +75,22 @@ function parseBody<T>(req: http.IncomingMessage, maxSize = MAX_BODY_SIZE): Promi
   });
 }
 
-function getUserId(req: http.IncomingMessage): string | null {
-  const authHeader = req.headers['x-user-id'];
-  if (typeof authHeader === 'string' && authHeader.trim() !== '') {
-    return authHeader.trim();
-  }
-  return null;
-}
-
-const ALLOWED_ORIGINS = new Set([
-  'http://localhost:3000',
-  'http://localhost:8080',
-]);
-
-function parseQuery(url: string): Record<string, string> {
-  const queryStr = url.split('?')[1];
-  if (!queryStr) return {};
-  const query: Record<string, string> = {};
+function getAuthenticatedUserId(req: http.IncomingMessage): string | null {
+  const userId = req.headers['x-user-id'];
+  const signature = req.headers['x-user-signature'];
+  if (typeof userId !== 'string' || typeof signature !== 'string') return null;
+  if (!/^[a-zA-Z0-9_-]{1,64}$/.test(userId)) return null;
   try {
-    for (const pair of queryStr.split('&')) {
-      const [key, value] = pair.split('=');
-      if (key) query[decodeURIComponent(key)] = decodeURIComponent(value || '');
-    }
+    const expected = crypto.createHmac('sha256', AUTH_SECRET).update(userId).digest('hex');
+    return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected)) ? userId : null;
   } catch {
-    // ignore malformed URL encoding
+    return null;
   }
-  return query;
 }
 
-function parseBoolParam(value: string | undefined): boolean | undefined {
-  if (value === 'true') return true;
-  if (value === 'false') return false;
-  return undefined;
-}
-
-function jsonResponse(res: http.ServerResponse, status: number, data: unknown) {
-  res.writeHead(status, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify(data));
-}
+const ALLOWED_ORIGINS = new Set(
+  (process.env.ALLOWED_ORIGINS || 'http://localhost:3000,http://localhost:8080').split(',').map(s => s.trim()).filter(Boolean)
+);
 
 function getPathSegments(url: string): { path: string[]; query: Record<string, string> } {
   const [pathname, queryStr] = url.split('?');
@@ -77,18 +105,48 @@ function getPathSegments(url: string): { path: string[]; query: Record<string, s
   return { path, query };
 }
 
+function parseBoolParam(value: string | undefined): boolean | undefined {
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  return undefined;
+}
+
+function jsonResponse(res: http.ServerResponse, status: number, data: unknown) {
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(data));
+}
+
 function sendError(res: ServerResponse, status: number, message: string) {
   res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ success: false, error: message }));
 }
 
+function requestLogger(req: http.IncomingMessage, userId: string | null, status: number, durationMs: number) {
+  const logData = {
+    method: req.method,
+    url: req.url,
+    userId,
+    status,
+    durationMs,
+    ip: req.headers['x-forwarded-for'] as string || req.socket.remoteAddress,
+  };
+  if (status >= 500) {
+    logger.error('Request failed', logData);
+  } else if (status >= 400) {
+    logger.warn('Request error', logData);
+  } else {
+    logger.info('Request', logData);
+  }
+}
+
 const server = http.createServer(async (req: IncomingMessage, res: ServerResponse) => {
+  const startMs = Date.now();
   const origin = req.headers['origin'];
   if (origin && ALLOWED_ORIGINS.has(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
   }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-User-Id');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-User-Id, X-User-Signature');
   res.setHeader('Access-Control-Max-Age', '86400');
 
   if (req.method === 'OPTIONS') {
@@ -97,15 +155,31 @@ const server = http.createServer(async (req: IncomingMessage, res: ServerRespons
     return;
   }
 
-  const userId = getUserId(req);
-  if (!userId) {
-    sendError(res, 401, '未提供用户身份标识，请使用 X-User-Id Header');
+  // Health check endpoint (no auth required)
+  if (req.method === 'GET' && req.url === '/health') {
+    const durationMs = Date.now() - startMs;
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      uptime: Math.round((Date.now() - START_TIME) / 1000),
+      version: '1.0.0',
+      durationMs,
+    }));
     return;
   }
 
-  // Validate userId format (non-empty alphanumeric string)
-  if (!/^[a-zA-Z0-9_-]{1,64}$/.test(userId)) {
-    sendError(res, 400, '无效的用户身份标识格式');
+  // Rate limiting
+  const clientIp = req.headers['x-forwarded-for'] as string || req.socket.remoteAddress || 'unknown';
+  if (!checkRateLimit(clientIp)) {
+    res.writeHead(429, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: '请求过于频繁，请稍后再试' }));
+    return;
+  }
+
+  const userId = getAuthenticatedUserId(req);
+  if (!userId) {
+    sendError(res, 401, '未认证或签名无效');
     return;
   }
 
@@ -116,7 +190,6 @@ const server = http.createServer(async (req: IncomingMessage, res: ServerRespons
 
     if (path[0] === 'weight-records' && path.length === 1 && req.method === 'POST') {
       const input = await parseBody<CreateWeightRecordInput>(req);
-      // Enforce userId from header, ignore any userId in body
       const enforcedInput = { ...input, userId };
       const result = upsertWeightRecord(enforcedInput);
       if ('success' in result && !result.success) {
@@ -124,11 +197,11 @@ const server = http.createServer(async (req: IncomingMessage, res: ServerRespons
       } else {
         jsonResponse(res, 200, result);
       }
+      requestLogger(req, userId, 200, Date.now() - startMs);
       return;
     }
 
     if (path[0] === 'weight-records' && path.length === 1 && req.method === 'GET') {
-      // Force userId from header, ignore query userId
       const safeQuery: WeightRecordQuery = { ...query as unknown as WeightRecordQuery, userId };
       if (query['period']) {
         (safeQuery as any).period = query['period'];
@@ -139,11 +212,11 @@ const server = http.createServer(async (req: IncomingMessage, res: ServerRespons
       } else {
         jsonResponse(res, 200, result);
       }
+      requestLogger(req, userId, 200, Date.now() - startMs);
       return;
     }
 
     if (path[0] === 'weight-records' && path[1] === 'stats' && path.length === 2 && req.method === 'GET') {
-      // Force userId from header
       const safeQuery: WeightRecordQuery = {
         ...query as unknown as WeightRecordQuery,
         userId,
@@ -154,27 +227,30 @@ const server = http.createServer(async (req: IncomingMessage, res: ServerRespons
       } else {
         jsonResponse(res, 200, result);
       }
+      requestLogger(req, userId, 200, Date.now() - startMs);
       return;
     }
 
-    // GET /weight-records/:id — must verify ownership
     if (path[0] === 'weight-records' && path.length === 2 && req.method === 'GET') {
       const record = getWeightRecordById(path[1], userId);
       if ('success' in record && !record.success) {
         jsonResponse(res, (record as any).statusCode, record);
+        requestLogger(req, userId, (record as any).statusCode, Date.now() - startMs);
         return;
       }
       jsonResponse(res, 200, record);
+      requestLogger(req, userId, 200, Date.now() - startMs);
       return;
     }
 
-    // DELETE /weight-records/:id — must verify ownership
     if (path[0] === 'weight-records' && path.length === 2 && req.method === 'DELETE') {
       const result = deleteWeightRecord(path[1], userId);
       if (typeof result === 'object' && 'success' in result && !result.success) {
         jsonResponse(res, (result as any).statusCode || 400, result);
+        requestLogger(req, userId, (result as any).statusCode || 400, Date.now() - startMs);
       } else {
         jsonResponse(res, 200, { success: true });
+        requestLogger(req, userId, 200, Date.now() - startMs);
       }
       return;
     }
@@ -183,7 +259,6 @@ const server = http.createServer(async (req: IncomingMessage, res: ServerRespons
 
     if (path[0] === 'notifications' && path.length === 1 && req.method === 'POST') {
       const input = await parseBody<CreateNotificationInput>(req);
-      // Enforce userId from header
       const enforcedInput = { ...input, userId };
       const result = createNotification(enforcedInput);
       if ('success' in result && !result.success) {
@@ -191,11 +266,11 @@ const server = http.createServer(async (req: IncomingMessage, res: ServerRespons
       } else {
         jsonResponse(res, 200, result);
       }
+      requestLogger(req, userId, 200, Date.now() - startMs);
       return;
     }
 
     if (path[0] === 'notifications' && path.length === 1 && req.method === 'GET') {
-      // Force userId from header, parse isRead as boolean
       const isReadParam = parseBoolParam(query['isRead']);
       const safeQuery: NotificationListQuery = {
         ...query as unknown as NotificationListQuery,
@@ -208,66 +283,77 @@ const server = http.createServer(async (req: IncomingMessage, res: ServerRespons
       } else {
         jsonResponse(res, 200, result);
       }
+      requestLogger(req, userId, 200, Date.now() - startMs);
       return;
     }
 
     if (path[0] === 'notifications' && path.length === 2 && path[1] === 'read-all' && req.method === 'POST') {
-      // Use userId from header, ignore body
       const result = markAllAsRead(userId);
       if ('success' in result && !result.success) {
         jsonResponse(res, (result as any).statusCode || 400, result);
+        requestLogger(req, userId, (result as any).statusCode || 400, Date.now() - startMs);
       } else {
         jsonResponse(res, 200, result);
+        requestLogger(req, userId, 200, Date.now() - startMs);
       }
       return;
     }
 
-    // GET /notifications/:id — must verify ownership
     if (path[0] === 'notifications' && path.length === 2 && path[1] !== 'read-all' && req.method === 'GET') {
       const notification = getNotificationById(path[1], userId);
       if ('success' in notification && !notification.success) {
         jsonResponse(res, (notification as any).statusCode, notification);
+        requestLogger(req, userId, (notification as any).statusCode, Date.now() - startMs);
         return;
       }
       jsonResponse(res, 200, notification);
+      requestLogger(req, userId, 200, Date.now() - startMs);
       return;
     }
 
-    // POST /notifications/:id (mark as read) — must verify ownership
     if (path[0] === 'notifications' && path.length === 2 && path[1] !== 'read-all' && req.method === 'POST') {
       const result = markAsRead(path[1], userId);
       if (typeof result === 'object' && 'success' in result && !result.success) {
         jsonResponse(res, (result as any).statusCode, result);
+        requestLogger(req, userId, (result as any).statusCode, Date.now() - startMs);
       } else {
         jsonResponse(res, 200, { success: true });
+        requestLogger(req, userId, 200, Date.now() - startMs);
       }
       return;
     }
 
-    // DELETE /notifications/:id — must verify ownership
     if (path[0] === 'notifications' && path.length === 2 && req.method === 'DELETE') {
       const result = deleteNotification(path[1], userId);
       if (typeof result === 'object' && 'success' in result && !result.success) {
         jsonResponse(res, (result as any).statusCode, result);
+        requestLogger(req, userId, (result as any).statusCode, Date.now() - startMs);
       } else {
         jsonResponse(res, 200, { success: true });
+        requestLogger(req, userId, 200, Date.now() - startMs);
       }
       return;
     }
 
     sendError(res, 404, 'Not Found');
+    requestLogger(req, userId, 404, Date.now() - startMs);
   } catch (e: any) {
     if (e.message === 'Request body too large') {
       sendError(res, 413, '请求体过大，最大支持 100KB');
     } else {
+      logger.error('Unhandled error', { error: e.message, stack: e.stack });
       sendError(res, 500, '服务器错误');
     }
+    requestLogger(req, userId, 500, Date.now() - startMs);
   }
 });
 
-const PORT = 3000;
-server.listen(PORT, () => {
-  console.log(`服务运行在 http://localhost:${PORT}`);
+const SERVER_PORT = process.env.NODE_ENV === 'test' ? 0 : PORT;
+server.listen(SERVER_PORT, () => {
+  logger.info(`服务运行在 http://localhost:${SERVER_PORT}`, {
+    env: process.env.NODE_ENV || 'development',
+    authSecretSet: process.env.AUTH_SECRET !== undefined,
+  });
 });
 
 export default server;

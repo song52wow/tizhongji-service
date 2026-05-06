@@ -82,6 +82,17 @@ function validateInput(input: CreateWeightRecordInput): ErrorResponse | null {
   if (input.note && (typeof input.note !== 'string' || input.note.length > MAX_NOTE_LENGTH)) {
     return { success: false, error: `备注最多${MAX_NOTE_LENGTH}字符`, statusCode: 400 };
   }
+  if (input.note) {
+    // Check for HTML/script injection patterns
+    const note = input.note;
+    const hasScript = /<script[\s\S]*?<\/script>/gi.test(note);
+    const hasEventHandler = /\bon\w+\s*=/gi.test(note);
+    const hasJavascript = /javascript:/gi.test(note);
+    const hasHtmlTags = /<\/?[a-z][^>]*>/gi.test(note);
+    if (hasScript || hasEventHandler || hasJavascript || hasHtmlTags) {
+      return { success: false, error: '备注包含非法内容', statusCode: 400 };
+    }
+  }
   return null;
 }
 
@@ -136,6 +147,9 @@ export function upsertWeightRecord(input: CreateWeightRecordInput): DailyWeightR
 export function listWeightRecords(query: WeightRecordQuery): PaginatedResult<WeightRecordWithDiff> | ErrorResponse {
   if (!query.userId || typeof query.userId !== 'string' || query.userId.trim() === '') {
     return { success: false, error: 'userId 为必填项', statusCode: 400 };
+  }
+  if (query.period !== undefined && !VALID_PERIODS.includes(query.period)) {
+    return { success: false, error: 'period 必须是 morning 或 evening', statusCode: 400 };
   }
   const rangeErr = validateDateRange(query.startDate, query.endDate);
   if (rangeErr) return rangeErr;

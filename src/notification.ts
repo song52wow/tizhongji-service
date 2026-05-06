@@ -30,16 +30,36 @@ function toNotification(row: Record<string, unknown>): Notification {
   };
 }
 
+function rejectHtml(value: string, field: string): ErrorResponse | null {
+  if (/<[^>]*>/i.test(value)) {
+    return { success: false, error: `${field}包含非法内容`, statusCode: 400 };
+  }
+  if (/\bon\w+\s*=/i.test(value) || /javascript:/i.test(value)) {
+    return { success: false, error: `${field}包含非法内容`, statusCode: 400 };
+  }
+  return null;
+}
+
 export function createNotification(input: CreateNotificationInput): Notification | ErrorResponse {
   if (!input.userId || typeof input.userId !== 'string' || input.userId.trim() === '') {
     return { success: false, error: 'userId 为必填项，格式不正确', statusCode: 400 };
   }
-  if (!input.title || typeof input.title !== 'string' || input.title.length > MAX_TITLE_LENGTH) {
+  if (!input.title || typeof input.title !== 'string' || input.title.trim().length === 0) {
+    return { success: false, error: '标题不能为空', statusCode: 400 };
+  }
+  if (input.title.length > MAX_TITLE_LENGTH) {
     return { success: false, error: '标题长度不能超过100字符', statusCode: 400 };
   }
-  if (!input.content || typeof input.content !== 'string' || input.content.length > MAX_CONTENT_LENGTH) {
+  if (!input.content || typeof input.content !== 'string' || input.content.trim().length === 0) {
+    return { success: false, error: '内容不能为空', statusCode: 400 };
+  }
+  if (input.content.length > MAX_CONTENT_LENGTH) {
     return { success: false, error: '内容长度不能超过2000字符', statusCode: 400 };
   }
+  const titleErr = rejectHtml(input.title, '标题');
+  if (titleErr) return titleErr;
+  const contentErr = rejectHtml(input.content, '内容');
+  if (contentErr) return contentErr;
   if (!VALID_TYPES.includes(input.type)) {
     return { success: false, error: `type 必须是以下值之一: ${VALID_TYPES.join(', ')}`, statusCode: 400 };
   }
@@ -80,15 +100,35 @@ export function createNotificationsBatch(inputs: CreateNotificationInput[]): Not
       if (!input.userId || typeof input.userId !== 'string' || input.userId.trim() === '') {
         throw { success: false, error: 'userId 为必填项，格式不正确', statusCode: 400 };
       }
-      if (!input.title || input.title.length > MAX_TITLE_LENGTH) {
+      const t = typeof input.title === 'string' ? input.title.trim() : '';
+      const c = typeof input.content === 'string' ? input.content.trim() : '';
+      if (!t || t.length === 0) {
+        throw { success: false, error: '标题不能为空', statusCode: 400 };
+      }
+      if (t.length > MAX_TITLE_LENGTH) {
         throw { success: false, error: '标题长度不能超过100字符', statusCode: 400 };
       }
-      if (!input.content || input.content.length > MAX_CONTENT_LENGTH) {
+      if (!c || c.length === 0) {
+        throw { success: false, error: '内容不能为空', statusCode: 400 };
+      }
+      if (c.length > MAX_CONTENT_LENGTH) {
         throw { success: false, error: '内容长度不能超过2000字符', statusCode: 400 };
       }
-      const id = uuidv4();
+      const typeErr = rejectHtml(input.type, 'type');
+      if (typeErr) throw typeErr;
+      const titleErr = rejectHtml(t, '标题');
+      if (titleErr) throw titleErr;
+      const contentErr = rejectHtml(c, '内容');
+      if (contentErr) throw contentErr;
+      if (!VALID_TYPES.includes(input.type)) {
+        throw { success: false, error: `type 必须是以下值之一: ${VALID_TYPES.join(', ')}`, statusCode: 400 };
+      }
       const priority = input.priority || 'normal';
-      insertStmt.run(id, input.userId.trim(), input.type, input.title.trim(), input.content.trim(), priority, createdAt);
+      if (!VALID_PRIORITIES.includes(priority)) {
+        throw { success: false, error: `priority 必须是以下值之一: ${VALID_PRIORITIES.join(', ')}`, statusCode: 400 };
+      }
+      const id = uuidv4();
+      insertStmt.run(id, input.userId.trim(), input.type, t, c, priority, createdAt);
       const row = db.prepare('SELECT * FROM notifications WHERE id = ?').get(id) as Record<string, unknown>;
       results.push(toNotification(row));
     }
