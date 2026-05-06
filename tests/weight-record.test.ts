@@ -487,3 +487,417 @@ describe('WT-016: 同一用户同一天不能创建两条相同 period 的记录
     expect(list.items[0].weight).toBe(64.5);
   });
 });
+
+describe('WT-017: listWeightRecords period 参数校验', () => {
+  let db: Database.Database;
+
+  beforeEach(() => {
+    db = setupTestDb();
+    const dbModule = require('../src/db') as typeof import('../src/db');
+    dbModule.getDb = () => db;
+  });
+
+  afterEach(() => {
+    db.close();
+    resetDb();
+  });
+
+  test('period=invalid 返回 400', () => {
+    upsertWeightRecord({ userId: 'user-001', date: '2026-04-20', period: 'morning' as const, weight: 65.0 });
+    const result = listWeightRecords({ userId: 'user-001', period: 'invalid' as any }) as { success: false; statusCode: number; error: string };
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(400);
+    expect(result.error).toContain('morning');
+    expect(result.error).toContain('evening');
+  });
+
+  test('period=afternoon（非法值）返回 400', () => {
+    const result = listWeightRecords({ userId: 'user-001', period: 'afternoon' as any }) as { success: false; statusCode: number };
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(400);
+  });
+
+  test('period=morning 正常返回', () => {
+    upsertWeightRecord({ userId: 'user-001', date: '2026-04-20', period: 'morning' as const, weight: 65.0 });
+    upsertWeightRecord({ userId: 'user-001', date: '2026-04-20', period: 'evening' as const, weight: 64.5 });
+    const result = listWeightRecords({ userId: 'user-001', period: 'morning' }) as { items: { period: string }[]; total: number };
+    expect(result.total).toBe(1);
+    expect(result.items[0].period).toBe('morning');
+  });
+
+  test('period=evening 正常返回', () => {
+    upsertWeightRecord({ userId: 'user-001', date: '2026-04-20', period: 'morning' as const, weight: 65.0 });
+    upsertWeightRecord({ userId: 'user-001', date: '2026-04-20', period: 'evening' as const, weight: 64.5 });
+    const result = listWeightRecords({ userId: 'user-001', period: 'evening' }) as { items: { period: string }[]; total: number };
+    expect(result.total).toBe(1);
+    expect(result.items[0].period).toBe('evening');
+  });
+});
+
+describe('WT-018: 体重边界值测试', () => {
+  let db: Database.Database;
+
+  beforeEach(() => {
+    db = setupTestDb();
+    const dbModule = require('../src/db') as typeof import('../src/db');
+    dbModule.getDb = () => db;
+  });
+
+  afterEach(() => {
+    db.close();
+    resetDb();
+  });
+
+  test('体重 = 20.0 kg（最小值）通过', () => {
+    const result = upsertWeightRecord({ userId: 'user-001', date: '2026-04-20', period: 'morning' as const, weight: 20.0 }) as { id: string };
+    expect(result).toHaveProperty('id');
+  });
+
+  test('体重 = 300.0 kg（最大值）通过', () => {
+    const result = upsertWeightRecord({ userId: 'user-001', date: '2026-04-20', period: 'morning' as const, weight: 300.0 }) as { id: string };
+    expect(result).toHaveProperty('id');
+  });
+
+  test('体重 = 19.9 kg 被拒绝', () => {
+    const result = upsertWeightRecord({ userId: 'user-001', date: '2026-04-20', period: 'morning' as const, weight: 19.9 }) as { success: false; statusCode: number };
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(400);
+  });
+
+  test('体重 = 300.1 kg 被拒绝', () => {
+    const result = upsertWeightRecord({ userId: 'user-001', date: '2026-04-20', period: 'morning' as const, weight: 300.1 }) as { success: false; statusCode: number };
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(400);
+  });
+
+  test('体重 = 0 被拒绝', () => {
+    const result = upsertWeightRecord({ userId: 'user-001', date: '2026-04-20', period: 'morning' as const, weight: 0 }) as { success: false; statusCode: number };
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(400);
+  });
+
+  test('体重 = -10 被拒绝', () => {
+    const result = upsertWeightRecord({ userId: 'user-001', date: '2026-04-20', period: 'morning' as const, weight: -10 }) as { success: false; statusCode: number };
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(400);
+  });
+});
+
+describe('WT-019: 备注字段边界与安全测试', () => {
+  let db: Database.Database;
+
+  beforeEach(() => {
+    db = setupTestDb();
+    const dbModule = require('../src/db') as typeof import('../src/db');
+    dbModule.getDb = () => db;
+  });
+
+  afterEach(() => {
+    db.close();
+    resetDb();
+  });
+
+  test('备注 = 200 字符通过', () => {
+    const note = 'a'.repeat(200);
+    const result = upsertWeightRecord({ userId: 'user-001', date: '2026-04-20', period: 'morning' as const, weight: 65.0, note }) as { id: string };
+    expect(result).toHaveProperty('id');
+  });
+
+  test('备注 = 201 字符被拒绝', () => {
+    const note = 'a'.repeat(201);
+    const result = upsertWeightRecord({ userId: 'user-001', date: '2026-04-20', period: 'morning' as const, weight: 65.0, note }) as { success: false; statusCode: number };
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(400);
+  });
+
+  test('备注含 <img onerror> 被拒绝', () => {
+    const result = upsertWeightRecord({ userId: 'user-001', date: '2026-04-20', period: 'morning' as const, weight: 65.0, note: '<img onerror="alert(1)" src=x>' }) as { success: false; statusCode: number };
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(400);
+  });
+
+  test('备注含 <a href="javascript:"> 被拒绝', () => {
+    const result = upsertWeightRecord({ userId: 'user-001', date: '2026-04-20', period: 'morning' as const, weight: 65.0, note: '<a href="javascript:alert(1)">link</a>' }) as { success: false; statusCode: number };
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(400);
+  });
+
+  test('备注含 <div onclick> 被拒绝', () => {
+    const result = upsertWeightRecord({ userId: 'user-001', date: '2026-04-20', period: 'morning' as const, weight: 65.0, note: '<div onclick="evil()">text</div>' }) as { success: false; statusCode: number };
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(400);
+  });
+
+  test('备注为正常文本通过', () => {
+    const result = upsertWeightRecord({ userId: 'user-001', date: '2026-04-20', period: 'morning' as const, weight: 65.0, note: '今天感觉不错！坚持运动。' }) as { id: string };
+    expect(result).toHaveProperty('id');
+  });
+});
+
+describe('WT-020: 分页参数测试', () => {
+  let db: Database.Database;
+
+  beforeEach(() => {
+    db = setupTestDb();
+    const dbModule = require('../src/db') as typeof import('../src/db');
+    dbModule.getDb = () => db;
+  });
+
+  afterEach(() => {
+    db.close();
+    resetDb();
+  });
+
+  test('默认 page=1, pageSize=20', () => {
+    for (let i = 1; i <= 25; i++) {
+      upsertWeightRecord({ userId: 'user-001', date: `2026-04-${i.toString().padStart(2, '0')}`, period: 'morning' as const, weight: 65.0 });
+    }
+    const result = listWeightRecords({ userId: 'user-001' }) as { items: unknown[]; total: number; page: number; pageSize: number };
+    expect(result.page).toBe(1);
+    expect(result.pageSize).toBe(20);
+    expect(result.items.length).toBe(20);
+    expect(result.total).toBe(25);
+  });
+
+  test('pageSize=5 返回5条', () => {
+    for (let i = 1; i <= 10; i++) {
+      upsertWeightRecord({ userId: 'user-001', date: `2026-04-${i.toString().padStart(2, '0')}`, period: 'morning' as const, weight: 65.0 });
+    }
+    const result = listWeightRecords({ userId: 'user-001', pageSize: 5 }) as { items: unknown[]; total: number };
+    expect(result.items.length).toBe(5);
+    expect(result.total).toBe(10);
+  });
+
+  test('page=2 返回后续记录', () => {
+    for (let i = 1; i <= 10; i++) {
+      upsertWeightRecord({ userId: 'user-001', date: `2026-04-${i.toString().padStart(2, '0')}`, period: 'morning' as const, weight: 65.0 });
+    }
+    const result = listWeightRecords({ userId: 'user-001', page: 2, pageSize: 5 }) as { items: unknown[] };
+    expect(result.items.length).toBe(5);
+  });
+
+  test('pageSize 上限为 100', () => {
+    const result = listWeightRecords({ userId: 'user-001', pageSize: 200 }) as { pageSize: number };
+    expect(result.pageSize).toBe(100);
+  });
+
+  test('page 最小为 1', () => {
+    for (let i = 1; i <= 5; i++) {
+      upsertWeightRecord({ userId: 'user-001', date: `2026-04-${i.toString().padStart(2, '0')}`, period: 'morning' as const, weight: 65.0 });
+    }
+    const result = listWeightRecords({ userId: 'user-001', page: -1 }) as { items: unknown[] };
+    expect(result.items.length).toBe(5);
+  });
+});
+
+describe('WT-021: 日期范围验证', () => {
+  let db: Database.Database;
+
+  beforeEach(() => {
+    db = setupTestDb();
+    const dbModule = require('../src/db') as typeof import('../src/db');
+    dbModule.getDb = () => db;
+  });
+
+  afterEach(() => {
+    db.close();
+    resetDb();
+  });
+
+  test('startDate > endDate 返回 400', () => {
+    const result = listWeightRecords({ userId: 'user-001', startDate: '2026-05-01', endDate: '2026-04-01' }) as { success: false; statusCode: number; error: string };
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(400);
+    expect(result.error).toContain('不能晚于');
+  });
+
+  test('无效 startDate 格式返回 400', () => {
+    const result = listWeightRecords({ userId: 'user-001', startDate: '2026/04/01' }) as { success: false; statusCode: number };
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(400);
+  });
+
+  test('无效 endDate 格式返回 400', () => {
+    const result = listWeightRecords({ userId: 'user-001', endDate: '04-01-2026' }) as { success: false; statusCode: number };
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(400);
+  });
+
+  test('calculateWeightStats 同样验证日期范围', () => {
+    const result = calculateWeightStats({ userId: 'user-001', startDate: '2026-05-01', endDate: '2026-04-01' }) as { success: false; statusCode: number };
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(400);
+  });
+});
+
+describe('WT-022: 空结果与统计边界测试', () => {
+  let db: Database.Database;
+
+  beforeEach(() => {
+    db = setupTestDb();
+    const dbModule = require('../src/db') as typeof import('../src/db');
+    dbModule.getDb = () => db;
+  });
+
+  afterEach(() => {
+    db.close();
+    resetDb();
+  });
+
+  test('无记录时 listWeightRecords 返回空数组', () => {
+    const result = listWeightRecords({ userId: 'user-001' }) as { items: unknown[]; total: number };
+    expect(result.items).toEqual([]);
+    expect(result.total).toBe(0);
+  });
+
+  test('无记录时 calculateWeightStats 返回 null 字段', () => {
+    const result = calculateWeightStats({ userId: 'user-001' }) as { avgMorningWeight: null; avgEveningWeight: null; minWeight: null; maxWeight: null; change: null; avgWeightDiff: null };
+    expect(result.avgMorningWeight).toBeNull();
+    expect(result.avgEveningWeight).toBeNull();
+    expect(result.minWeight).toBeNull();
+    expect(result.maxWeight).toBeNull();
+    expect(result.change).toBeNull();
+    expect(result.avgWeightDiff).toBeNull();
+  });
+
+  test('仅有 evening 记录时 stats 计算正确', () => {
+    upsertWeightRecord({ userId: 'user-001', date: '2026-04-20', period: 'evening' as const, weight: 65.0 });
+    upsertWeightRecord({ userId: 'user-001', date: '2026-04-21', period: 'evening' as const, weight: 64.5 });
+    const result = calculateWeightStats({ userId: 'user-001' }) as { avgMorningWeight: number | null; avgEveningWeight: number | null; avgWeightDiff: number | null };
+    expect(result.avgMorningWeight).toBeNull();
+    expect(result.avgEveningWeight).toBe(64.8);
+    expect(result.avgWeightDiff).toBeNull(); // 需要同一天有 morning+evening 才有值
+  });
+
+  test('change 为 null 当记录少于 2 条', () => {
+    upsertWeightRecord({ userId: 'user-001', date: '2026-04-20', period: 'morning' as const, weight: 65.0 });
+    const result = calculateWeightStats({ userId: 'user-001' }) as { change: number | null };
+    expect(result.change).toBeNull();
+  });
+
+  test('change 计算：第1条到最后1条（按日期排序）', () => {
+    upsertWeightRecord({ userId: 'user-001', date: '2026-04-18', period: 'morning' as const, weight: 66.0 });
+    upsertWeightRecord({ userId: 'user-001', date: '2026-04-19', period: 'morning' as const, weight: 65.5 });
+    upsertWeightRecord({ userId: 'user-001', date: '2026-04-20', period: 'morning' as const, weight: 64.8 });
+    const result = calculateWeightStats({ userId: 'user-001' }) as { change: number };
+    expect(result.change).toBe(-1.2); // 64.8 - 66.0
+  });
+
+  test('avgWeightDiff 只有同一天有 morning+evening 时才计算', () => {
+    upsertWeightRecord({ userId: 'user-001', date: '2026-04-20', period: 'morning' as const, weight: 65.0 });
+    upsertWeightRecord({ userId: 'user-001', date: '2026-04-20', period: 'evening' as const, weight: 64.0 });
+    upsertWeightRecord({ userId: 'user-001', date: '2026-04-21', period: 'morning' as const, weight: 64.5 });
+    // 没有 evening
+    const result = calculateWeightStats({ userId: 'user-001' }) as { avgWeightDiff: number | null };
+    expect(result.avgWeightDiff).toBe(-1.0); // 只计算了 2026-04-20 的 diff
+  });
+});
+
+describe('WT-023: userId 验证', () => {
+  let db: Database.Database;
+
+  beforeEach(() => {
+    db = setupTestDb();
+    const dbModule = require('../src/db') as typeof import('../src/db');
+    dbModule.getDb = () => db;
+  });
+
+  afterEach(() => {
+    db.close();
+    resetDb();
+  });
+
+  test('upsertWeightRecord 空 userId 返回 400', () => {
+    const result = upsertWeightRecord({ userId: '', date: '2026-04-20', period: 'morning' as const, weight: 65.0 }) as { success: false; statusCode: number };
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(400);
+  });
+
+  test('upsertWeightRecord 空白 userId 返回 400', () => {
+    const result = upsertWeightRecord({ userId: '   ', date: '2026-04-20', period: 'morning' as const, weight: 65.0 }) as { success: false; statusCode: number };
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(400);
+  });
+
+  test('listWeightRecords 空 userId 返回 400', () => {
+    const result = listWeightRecords({ userId: '' }) as { success: false; statusCode: number };
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(400);
+  });
+
+  test('calculateWeightStats 空 userId 返回 400', () => {
+    const result = calculateWeightStats({ userId: '' }) as { success: false; statusCode: number };
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(400);
+  });
+});
+
+describe('WT-024: getWeightRecordById 与 deleteWeightRecord 边界', () => {
+  let db: Database.Database;
+
+  beforeEach(() => {
+    db = setupTestDb();
+    const dbModule = require('../src/db') as typeof import('../src/db');
+    dbModule.getDb = () => db;
+  });
+
+  afterEach(() => {
+    db.close();
+    resetDb();
+  });
+
+  test('已删除记录 getWeightRecordById 返回 404', () => {
+    const created = upsertWeightRecord({ userId: 'user-001', date: '2026-04-20', period: 'morning' as const, weight: 65.0 }) as { id: string };
+    deleteWeightRecord(created.id, 'user-001');
+    const result = getWeightRecordById(created.id, 'user-001') as { success: false; statusCode: number };
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(404);
+  });
+
+  test('空白 userId 在 getWeightRecordById 返回 404', () => {
+    const result = getWeightRecordById('some-id', '  ') as { success: false; statusCode: number };
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(404);
+  });
+
+  test('空白 userId 在 deleteWeightRecord 返回 404', () => {
+    const result = deleteWeightRecord('some-id', '  ') as { success: false; statusCode: number };
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(404);
+  });
+});
+
+describe('WT-025: 特殊日期格式验证', () => {
+  let db: Database.Database;
+
+  beforeEach(() => {
+    db = setupTestDb();
+    const dbModule = require('../src/db') as typeof import('../src/db');
+    dbModule.getDb = () => db;
+  });
+
+  afterEach(() => {
+    db.close();
+    resetDb();
+  });
+
+  test('2024-01-01 通过', () => {
+    const result = upsertWeightRecord({ userId: 'user-001', date: '2024-01-01', period: 'morning' as const, weight: 65.0 }) as { id: string };
+    expect(result).toHaveProperty('id');
+  });
+
+  test('2024-12-31 通过', () => {
+    const result = upsertWeightRecord({ userId: 'user-001', date: '2024-12-31', period: 'morning' as const, weight: 65.0 }) as { id: string };
+    expect(result).toHaveProperty('id');
+  });
+
+  test('2023-01-01（非闰年，01-01）通过', () => {
+    const result = upsertWeightRecord({ userId: 'user-001', date: '2023-01-01', period: 'morning' as const, weight: 65.0 }) as { id: string };
+    expect(result).toHaveProperty('id');
+  });
+
+  test('2023-12-31（非闰年，12-31）通过', () => {
+    const result = upsertWeightRecord({ userId: 'user-001', date: '2023-12-31', period: 'morning' as const, weight: 65.0 }) as { id: string };
+    expect(result).toHaveProperty('id');
+  });
+});
