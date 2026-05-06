@@ -1,0 +1,674 @@
+#openapi: 3.0.3
+info:
+  title: 体重记录与通知服务 API
+  description: |
+    用户体重记录 + 通知服务 API
+
+    ## 认证方式
+    使用 HMAC SHA256 签名认证，所有请求需包含以下 Header：
+    - `X-User-Id`: 用户 ID（1-64位字母数字）
+    - `X-User-Signature`: HMAC-SHA256(userId, AUTH_SECRET) 的十六进制字符串
+
+    ## 通用响应格式
+    成功时返回对象本身或 `{ items, total, page, pageSize }` 分页结构。
+    失败时返回 `{ success: false, error: "错误信息", statusCode: 数字 }`
+  version: 1.0.0
+  contact:
+    name: 开发团队
+
+servers:
+  - url: http://localhost:3000
+    description: 本地开发环境
+  - url: https://api.tizhongji.com
+    description: 生产环境
+
+paths:
+  /health:
+    get:
+      summary: 健康检查
+      description: 返回服务健康状态，无需认证
+      tags:
+        - 系统
+      responses:
+        '200':
+          description: 服务正常运行
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  timestamp:
+                    type: string
+                    format: date-time
+                  uptime:
+                    type: number
+                    description: 服务运行时间（秒）
+                  version:
+                    type: string
+                    example: 1.0.0
+
+  /weight-records:
+    get:
+      summary: 查询体重记录列表
+      tags:
+        - 体重记录
+      security:
+        - HMAC: []
+      parameters:
+        - name: startDate
+          in: query
+          description: 起始日期（YYYY-MM-DD）
+          schema:
+            type: string
+            format: date
+        - name: endDate
+          in: query
+          description: 结束日期（YYYY-MM-DD）
+          schema:
+            type: string
+            format: date
+        - name: period
+          in: query
+          description: 时段筛选
+          schema:
+            type: string
+            enum: [morning, evening]
+        - name: page
+          in: query
+          description: 页码（默认1）
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: pageSize
+          in: query
+          description: 每页条数（默认20，最大100）
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: 体重记录列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WeightRecordListResponse'
+        '400':
+          description: 参数错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未认证
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      summary: 创建或更新体重记录（Upsert）
+      description: |
+        同一用户同一天同时段只能有一条记录。
+        再次提交相同 date+period 的记录会更新已有记录。
+      tags:
+        - 体重记录
+      security:
+        - HMAC: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWeightRecordInput'
+            example:
+              date: "2026-05-06"
+              period: "morning"
+              weight: 65.5
+              note: "空腹测量"
+      responses:
+        '200':
+          description: 创建/更新成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DailyWeightRecord'
+        '400':
+          description: 参数错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未认证
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /weight-records/stats:
+    get:
+      summary: 获取体重统计数据
+      description: |
+        计算指定日期范围内的体重统计数据：
+        - 早间/晚间平均体重
+        - 最小/最大体重
+        - 首尾体重变化差值
+        - 平均早晚差值
+      tags:
+        - 体重记录
+      security:
+        - HMAC: []
+      parameters:
+        - name: startDate
+          in: query
+          description: 起始日期（YYYY-MM-DD）
+          schema:
+            type: string
+        - name: endDate
+          in: query
+          description: 结束日期（YYYY-MM-DD）
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 统计数据
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2WeightStats'
+        '400':
+          description: 参数错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未认证
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /weight-records/{id}:
+    get:
+      summary: 获取单条体重记录
+      tags:
+        - 体重记录
+      security:
+        - HMAC: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: 记录 ID
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: 体重记录
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DailyWeightRecord'
+        '401':
+          description: 未认证
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: 记录不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      summary: 删除体重记录
+      tags:
+        - 体重记录
+      security:
+        - HMAC: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: 记录 ID
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: 删除成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+        '401':
+          description: 未认证
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: 记录不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /notifications:
+    get:
+      summary: 查询通知列表
+      tags:
+        - 通知
+      security:
+        - HMAC: []
+      parameters:
+        - name: type
+          in: query
+          description: 通知类型筛选
+          schema:
+            type: string
+            enum: [system, order, message, campaign]
+        - name: isRead
+          in: query
+          description: 已读状态筛选
+          schema:
+            type: string
+            enum: [true, false]
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: pageSize
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: 通知列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationListResponse'
+        '401':
+          description: 未认证
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      summary: 创建通知
+      tags:
+        - 通知
+      security:
+        - HMAC: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateNotificationInput'
+            example:
+              type: "system"
+              title: "体重记录提醒"
+              content: "今日还未记录体重，记得早晚各测量一次哦！"
+              priority: "normal"
+      responses:
+        '200':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Notification'
+        '400':
+          description: 参数错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未认证
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /notifications/read-all:
+    post:
+      summary: 全部标记已读
+      tags:
+        - 通知
+      security:
+        - HMAC: []
+      responses:
+        '200':
+          description: 标记成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  count:
+                    type: integer
+                    description: 本次标记已读的通知数量
+        '401':
+          description: 未认证
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /notifications/{id}:
+    get:
+      summary: 获取单条通知
+      tags:
+        - 通知
+      security:
+        - HMAC: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: 通知详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Notification'
+        '401':
+          description: 未认证
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: 通知不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      summary: 标记通知已读
+      tags:
+        - 通知
+      security:
+        - HMAC: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: 标记成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+        '401':
+          description: 未认证
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: 通知不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      summary: 删除通知（软删除）
+      tags:
+        - 通知
+      security:
+        - HMAC: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: 删除成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+        '401':
+          description: 未认证
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: 通知不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  securitySchemes:
+    HMAC:
+      type: apiKey
+      in: header
+      name: X-User-Signature
+      description: |
+        HMAC-SHA256 签名认证
+        - `X-User-Id`: 用户标识符
+        - `X-User-Signature`: `HMAC-SHA256(userId, AUTH_SECRET)` 的十六进制字符串
+      x-user-id:
+        type: apiKey
+        in: header
+        name: X-User-Id
+
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          const: false
+        error:
+          type: string
+        statusCode:
+          type: integer
+
+    DailyWeightRecord:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        userId:
+          type: string
+        date:
+          type: string
+          format: date
+          example: "2026-05-06"
+        period:
+          type: string
+          enum: [morning, evening]
+        weight:
+          type: number
+          format: double
+          description: 体重（kg）
+        note:
+          type: string
+          nullable: true
+        weightDiff:
+          type: number
+          nullable: true
+          description: 当天早晚体重差值（kg）
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    WeightRecordListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/DailyWeightRecord'
+        total:
+          type: integer
+        page:
+          type: integer
+        pageSize:
+          type: integer
+
+    CreateWeightRecordInput:
+      type: object
+      required:
+        - date
+        - period
+        - weight
+      properties:
+        date:
+          type: string
+          description: 日期（YYYY-MM-DD），不能超过当前日期
+          example: "2026-05-06"
+        period:
+          type: string
+          enum: [morning, evening]
+          description: 时段
+        weight:
+          type: number
+          description: 体重（kg），范围 20~300
+          minimum: 20
+          maximum: 300
+        note:
+          type: string
+          description: 备注（最多200字符）
+          maxLength: 200
+
+    V2WeightStats:
+      type: object
+      properties:
+        avgMorningWeight:
+          type: number
+          nullable: true
+          description: 早间平均体重（kg）
+        avgEveningWeight:
+          type: number
+          nullable: true
+          description: 晚间平均体重（kg）
+        minWeight:
+          type: number
+          nullable: true
+          description: 最小体重（kg）
+        maxWeight:
+          type: number
+          nullable: true
+          description: 最大体重（kg）
+        change:
+          type: number
+          nullable: true
+          description: 首尾体重变化差值（kg）
+        avgWeightDiff:
+          type: number
+          nullable: true
+          description: 平均早晚差值（kg）
+
+    Notification:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        userId:
+          type: string
+        type:
+          type: string
+          enum: [system, order, message, campaign]
+        title:
+          type: string
+          maxLength: 100
+        content:
+          type: string
+          maxLength: 2000
+        isRead:
+          type: boolean
+        priority:
+          type: string
+          enum: [low, normal, high]
+        createdAt:
+          type: string
+          format: date-time
+        readAt:
+          type: string
+          format: date-time
+          nullable: true
+        deleted:
+          type: boolean
+
+    NotificationListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Notification'
+        total:
+          type: integer
+        page:
+          type: integer
+        pageSize:
+          type: integer
+
+    CreateNotificationInput:
+      type: object
+      required:
+        - type
+        - title
+        - content
+      properties:
+        type:
+          type: string
+          enum: [system, order, message, campaign]
+        title:
+          type: string
+          maxLength: 100
+        content:
+          type: string
+          maxLength: 2000
+        priority:
+          type: string
+          enum: [low, normal, high]
+          default: normal

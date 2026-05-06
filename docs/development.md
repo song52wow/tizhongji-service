@@ -911,22 +911,31 @@ DELETE /notifications/:id
 
 ### 8.1 身份认证
 
-当前认证方案是轻量 Header 方案：
+当前认证方案是 HMAC-SHA256 签名认证：
 
 ```http
 X-User-Id: user-001
+X-User-Signature: <HMAC-SHA256(userId, AUTH_SECRET) hex digest>
 ```
 
 服务端认证规则：
 
 - 所有业务路由进入前必须存在用户身份。
-- 缺少 `X-User-Id` 返回 `401`。
+- 同时需要 `X-User-Id` 和 `X-User-Signature` 两个 Header。
 - `X-User-Id` 必须匹配 `^[a-zA-Z0-9_-]{1,64}$`。
-- 非法 `X-User-Id` 返回 `400`。
+- `X-User-Signature` 为 `HMAC-SHA256(AUTH_SECRET, X-User-Id)` 的十六进制结果，使用 `timingSafeEqual` 比较防止时序攻击。
+- 缺少 `X-User-Id` 或 `X-User-Signature` 返回 `401 未认证或签名无效`。
+- 签名不匹配返回 `401 未认证或签名无效`。
 - 服务端只信任 Header 中的用户身份。
 - 服务端忽略 body 或 query 中传入的 `userId`。
 
-生产环境注意：`X-User-Id` 当前无服务端签名验证，客户端可伪造任意身份。生产环境应替换为 JWT、Session 或网关签发的可信身份。
+CORS 请求头需包含：
+
+```http
+Access-Control-Allow-Headers: Content-Type, X-User-Id, X-User-Signature
+```
+
+生产环境注意：`AUTH_SECRET` 必须设置为强随机值，生产环境应替换为 JWT、Session 或网关签发的可信身份。
 
 ### 8.2 对象级授权
 
@@ -959,7 +968,7 @@ const ALLOWED_ORIGINS = new Set([
 
 ```http
 Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS
-Access-Control-Allow-Headers: Content-Type, X-User-Id
+Access-Control-Allow-Headers: Content-Type, X-User-Id, X-User-Signature
 Access-Control-Max-Age: 86400
 ```
 
