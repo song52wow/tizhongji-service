@@ -2,17 +2,23 @@
   "name": "user-notification-center",
   "version": "1.0.0",
   "description": "用户通知中心",
-  "main": "dist/notification.js",
+  "main": "dist/server.js",
   "scripts": {
     "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "tsc && node dist/server.js",
     "test": "jest",
-    "test:unit": "jest tests/"
+    "test:unit": "jest tests/",
+    "migrate": "bash scripts/migrate.sh",
+    "migrate:up": "bash scripts/migrate.sh up",
+    "migrate:status": "bash scripts/migrate.sh status"
   },
   "dependencies": {
     "better-sqlite3": "^11.0.0",
     "uuid": "^9.0.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@types/better-sqlite3": "^7.6.0",
     "@types/jest": "^29.5.0",
     "@types/node": "^20.0.0",
