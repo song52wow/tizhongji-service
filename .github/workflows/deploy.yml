@@ -77,14 +77,7 @@ jobs:
             docker pull ${ACR_REGISTRY}/${IMAGE_NAME}:latest
 
             # Create .env file
-            AUTH_SECRET="${AUTH_SECRET}" ALLOWED_ORIGINS="${ALLOWED_ORIGINS}" envsubst < .env.template > .env 2>/dev/null || cat > .env << ENDOFILE
-            AUTH_SECRET=${AUTH_SECRET}
-            ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
-            NODE_ENV=production
-            PORT=3000
-            RATE_LIMIT_MAX=10000
-            LOG_LEVEL=info
-            ENDOFILE
+            printf 'AUTH_SECRET=%s\nALLOWED_ORIGINS=%s\nNODE_ENV=production\nPORT=3000\nRATE_LIMIT_MAX=10000\nLOG_LEVEL=info\n' "${AUTH_SECRET}" "${ALLOWED_ORIGINS}" > .env
 
             # Update docker-compose image and restart
             IMAGE_TAG=${ACR_REGISTRY}/${IMAGE_NAME}:latest docker-compose up -d --no-deps
