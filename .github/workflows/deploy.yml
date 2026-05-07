@@ -68,7 +68,7 @@ jobs:
           echo "${{ secrets.SERVER_SSH_KEY }}" > /tmp/server_key
           chmod 600 /tmp/server_key
 
-          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /tmp/server_key ${SERVER_USER}@${SERVER_HOST} << 'ENDSSH'
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /tmp/server_key ${SERVER_USER}@${SERVER_HOST} << ENDSSH
             set -e
 
             cd ${DEPLOY_PATH}
@@ -77,14 +77,14 @@ jobs:
             docker pull ${ACR_REGISTRY}/${IMAGE_NAME}:latest
 
             # Create .env file
-            cat > .env << 'ENVEOF'
+            AUTH_SECRET="${AUTH_SECRET}" ALLOWED_ORIGINS="${ALLOWED_ORIGINS}" envsubst < .env.template > .env 2>/dev/null || cat > .env << ENDOFILE
             AUTH_SECRET=${AUTH_SECRET}
             ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
             NODE_ENV=production
             PORT=3000
             RATE_LIMIT_MAX=10000
             LOG_LEVEL=info
-            ENVEOF
+            ENDOFILE
 
             # Update docker-compose image and restart
             IMAGE=${ACR_REGISTRY}/${IMAGE_NAME}:latest docker-compose up -d --no-deps
