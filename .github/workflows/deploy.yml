@@ -1,0 +1,81 @@
+name: Deploy to Aliyun Server
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+        env:
+          NODE_ENV: production
+
+      - name: Deploy to server
+        env:
+          SERVER_HOST: ${{ vars.SERVER_HOST }}
+          SERVER_USER: ${{ vars.SERVER_USER }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+          AUTH_SECRET: ${{ vars.AUTH_SECRET }}
+          ALLOWED_ORIGINS: ${{ vars.ALLOWED_ORIGINS }}
+        run: |
+          echo "${{ secrets.SERVER_SSH_KEY }}" > /tmp/server_key
+          chmod 600 /tmp/server_key
+
+          # Create .env content
+          ENV_CONTENT="AUTH_SECRET=${AUTH_SECRET}"
+          ENV_CONTENT+="\nALLOWED_ORIGINS=${ALLOWED_ORIGINS}"
+          ENV_CONTENT+="\nNODE_ENV=production"
+          ENV_CONTENT+="\nPORT=3000"
+          ENV_CONTENT+="\nRATE_LIMIT_MAX=10000"
+          ENV_CONTENT+="\nLOG_LEVEL=info"
+
+          # Deploy via SSH
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /tmp/server_key ${SERVER_USER}@${SERVER_HOST} << 'ENDSSH'
+            set -e
+
+            cd ${DEPLOY_PATH}
+
+            # Pull latest code
+            git pull origin main
+
+            # Install dependencies and build
+            npm ci --production
+            npm run build
+
+            # Write .env file
+            cat > .env << 'ENVEOF'
+            AUTH_SECRET=${AUTH_SECRET}
+            ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
+            NODE_ENV=production
+            PORT=3000
+            RATE_LIMIT_MAX=10000
+            LOG_LEVEL=info
+            ENVEOF
+
+            # Restart PM2
+            pm2 restart tizhongji-service || pm2 start dist/server.js --name tizhongji-service
+          ENDSSH
+
+          rm /tmp/server_key
+
+      - name: Health check
+        run: |
+          sleep 5
+          curl -s https://tizhongji.cisonc.site/health || echo "Health check skipped"
