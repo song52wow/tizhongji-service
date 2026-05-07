@@ -80,7 +80,7 @@ jobs:
             printf 'AUTH_SECRET=%s\nALLOWED_ORIGINS=%s\nNODE_ENV=production\nPORT=3000\nRATE_LIMIT_MAX=10000\nLOG_LEVEL=info\n' "${AUTH_SECRET}" "${ALLOWED_ORIGINS}" > .env
 
             # Update docker-compose image and restart
-            IMAGE_TAG=${ACR_REGISTRY}/${IMAGE_NAME}:latest docker-compose up -d --no-deps
+            IMAGE_TAG=${ACR_REGISTRY}/${IMAGE_NAME}:latest docker compose up -d --no-deps
 
             # Clean up old images
             docker image prune -f
