@@ -87,7 +87,7 @@ jobs:
             ENDOFILE
 
             # Update docker-compose image and restart
-            IMAGE=${ACR_REGISTRY}/${IMAGE_NAME}:latest docker-compose up -d --no-deps
+            IMAGE_TAG=${ACR_REGISTRY}/${IMAGE_NAME}:latest docker-compose up -d --no-deps
 
             # Clean up old images
             docker image prune -f

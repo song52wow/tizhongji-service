@@ -2,9 +2,7 @@ version: '3.8'
 
 services:
   api:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ${IMAGE_TAG:-crpi-df6i5zrps8a8t6ig.cn-shenzhen.personal.cr.aliyuncs.com/song52wow/tizhongji-service:latest}
     container_name: tizhongji-api
     restart: unless-stopped
     ports:
@@ -13,10 +11,10 @@ services:
       - NODE_ENV=production
       - PORT=3000
       - AUTH_SECRET=${AUTH_SECRET}
-      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://yourdomain.com}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - RATE_LIMIT_WINDOW_MS=60000
-      - RATE_LIMIT_MAX=100
+      - RATE_LIMIT_MAX=10000
       - DB_PATH=/app/data/notifications.db
     volumes:
       - ./data:/app/data
