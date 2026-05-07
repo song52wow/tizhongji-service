@@ -14,7 +14,4 @@ data/
 tests/
 *.test.ts
 docker-compose.yml
-Dockerfile
-.dockerignore
 ecosystem.config.js
-tsconfig.json
