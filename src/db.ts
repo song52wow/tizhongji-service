@@ -78,6 +78,44 @@ export function initSchema(database: Database.Database): void {
 
     CREATE INDEX IF NOT EXISTS idx_weight_records_user_date ON weight_records(user_id, date);
     CREATE INDEX IF NOT EXISTS idx_weight_records_user_period ON weight_records(user_id, period);
+
+    CREATE TABLE IF NOT EXISTS reminders (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      remind_time TEXT NOT NULL,
+      period TEXT NOT NULL CHECK(period IN ('morning', 'evening', 'both')),
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_reminders_user_id ON reminders(user_id);
+
+    CREATE TABLE IF NOT EXISTS invitation_codes (
+      id TEXT PRIMARY KEY,
+      code TEXT NOT NULL UNIQUE,
+      creator_user_id TEXT NOT NULL,
+      is_used INTEGER NOT NULL DEFAULT 0,
+      used_by_user_id TEXT,
+      created_at TEXT NOT NULL,
+      used_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_invitation_codes_creator ON invitation_codes(creator_user_id);
+    CREATE INDEX IF NOT EXISTS idx_invitation_codes_code ON invitation_codes(code);
+
+    CREATE TABLE IF NOT EXISTS user_activities (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      activity_type TEXT NOT NULL CHECK(activity_type IN ('login', 'record_weight', 'check_in')),
+      date TEXT NOT NULL,
+      metadata TEXT,
+      created_at TEXT NOT NULL,
+      UNIQUE(user_id, activity_type, date)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_user_activities_user_date ON user_activities(user_id, date);
+    CREATE INDEX IF NOT EXISTS idx_user_activities_type ON user_activities(user_id, activity_type);
   `);
 }
 

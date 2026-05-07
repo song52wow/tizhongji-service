@@ -1,6 +1,6 @@
 # E2E 测试报告
 
-**测试时间**: 2026-05-06 (更新)
+**测试时间**: 2026-05-06 (更新 v2)
 **测试工程师**: tester-e2e
 **测试框架**: Playwright 1.59.1
 **被测服务**: tizhongji-service (Node.js HTTP Server)
@@ -12,8 +12,8 @@
 
 | 项目 | 结果 |
 |------|------|
-| 测试用例总数 | **86** |
-| 通过 | **86** |
+| 测试用例总数 | **133** |
+| 通过 | **133** |
 | 失败 | 0 |
 | 跳过 | 0 |
 | 通过率 | **100%** |
@@ -30,6 +30,9 @@
 | 完整用户流程测试 (user-flow.test.ts) | 7 | ✅ 全部通过 |
 | 健康检查 E2E 测试 (health.test.ts) | 5 | ✅ 全部通过 |
 | 输入验证边界测试 (input-validation.test.ts) | 24 | ✅ 全部通过 |
+| 提醒通知 E2E 测试 (reminder.test.ts) | 21 | ✅ 全部通过 |
+| 邀请码 E2E 测试 (invitation.test.ts) | 13 | ✅ 全部通过 |
+| 成就系统 E2E 测试 (achievement.test.ts) | 13 | ✅ 全部通过 |
 
 ---
 
@@ -151,6 +154,68 @@
 | E2E-VALID-021 | stats 日期范围过滤正确 | ✅ |
 | E2E-VALID-022 | stats 无效日期 → 400 | ✅ |
 
+### 7. 提醒通知 E2E 测试 (E2E-REM-001 ~ E2E-REM-021)
+
+| 用例 | 场景 | 结果 |
+|------|------|------|
+| E2E-REM-001 | 创建早间提醒 | ✅ |
+| E2E-REM-002 | 创建晚间提醒 | ✅ |
+| E2E-REM-003 | 创建早晚双时段提醒 | ✅ |
+| E2E-REM-004 | 无效 remindTime 格式 → 400 | ✅ |
+| E2E-REM-005 | remindTime 分隔符错误 → 400 | ✅ |
+| E2E-REM-006 | 无效 period → 400 | ✅ |
+| E2E-REM-007 | 空 remindTime → 400 | ✅ |
+| E2E-REM-008 | enabled 未提供时默认为 true | ✅ |
+| E2E-REM-009 | 列表按时间排序 | ✅ |
+| E2E-REM-010 | 无提醒用户返回空列表 | ✅ |
+| E2E-REM-011 | 更新 remindTime | ✅ |
+| E2E-REM-012 | 更新 period | ✅ |
+| E2E-REM-013 | 关闭提醒 (enabled=false) | ✅ |
+| E2E-REM-014 | 重新开启提醒 (enabled=true) | ✅ |
+| E2E-REM-015 | 更新不存在的提醒 → 404 | ✅ |
+| E2E-REM-016 | 更新时无效 period → 400 | ✅ |
+| E2E-REM-017 | 删除提醒 | ✅ |
+| E2E-REM-018 | 删除不存在的提醒 → 404 | ✅ |
+| E2E-REM-019 | 跨用户隔离 - B 无法更新 A 的提醒 | ✅ |
+| E2E-REM-020 | 跨用户隔离 - B 无法删除 A 的提醒 | ✅ |
+| E2E-REM-021 | A 的列表不包含 B 的提醒 | ✅ |
+
+### 8. 邀请码 E2E 测试 (E2E-INV-001 ~ E2E-INV-013)
+
+| 用例 | 场景 | 结果 |
+|------|------|------|
+| E2E-INV-001 | 生成邀请码 | ✅ |
+| E2E-INV-002 | 生成有效的字母数字邀请码 | ✅ |
+| E2E-INV-003 | 多次生成产生唯一码 | ✅ |
+| E2E-INV-004 | 列出自己的邀请码 | ✅ |
+| E2E-INV-005 | 列表按 created_at 降序排列 | ✅ |
+| E2E-INV-006 | 新用户返回空列表 | ✅ |
+| E2E-INV-007 | 兑换有效邀请码 | ✅ |
+| E2E-INV-008 | 不能重复兑换同个邀请码 → 400 | ✅ |
+| E2E-INV-009 | 不能使用自己的邀请码 → 400 | ✅ |
+| E2E-INV-010 | 不存在的邀请码 → 404 | ✅ |
+| E2E-INV-011 | 空邀请码 → 400 | ✅ |
+| E2E-INV-012 | 邀请码兑换大小写不敏感 | ✅ |
+| E2E-INV-013 | 已兑换的邀请码状态正确更新 | ✅ |
+
+### 9. 成就系统 E2E 测试 (E2E-ACH-001 ~ E2E-ACH-013)
+
+| 用例 | 场景 | 结果 |
+|------|------|------|
+| E2E-ACH-001 | 记录 login 活动 | ✅ |
+| E2E-ACH-002 | 记录 record_weight 活动 | ✅ |
+| E2E-ACH-003 | 记录 check_in 活动 | ✅ |
+| E2E-ACH-004 | 记录带 metadata 的活动 | ✅ |
+| E2E-ACH-005 | 同日同类型重复活动返回已有记录 | ✅ |
+| E2E-ACH-006 | 无效 activityType → 400 | ✅ |
+| E2E-ACH-007 | 无效日期格式 → 400 | ✅ |
+| E2E-ACH-008 | 空 activityType → 400 | ✅ |
+| E2E-ACH-009 | 新用户统计返回零值 | ✅ |
+| E2E-ACH-010 | 追踪总登录天数 | ✅ |
+| E2E-ACH-011 | 追踪连续记录天数 | ✅ |
+| E2E-ACH-012 | 计算连续打卡天数 (streak) | ✅ |
+| E2E-ACH-013 | 统计数据跨用户隔离 | ✅ |
+
 ---
 
 ## 发现并修复的问题
@@ -196,8 +261,11 @@ tests/e2e/
 ├── weight-record.test.ts    # 体重记录测试 (23用例)
 ├── notification.test.ts     # 通知中心测试 (20用例)
 ├── user-flow.test.ts        # 完整用户流程测试 (7用例)
-├── health.test.ts            # 健康检查测试 (5用例) ← 新增
-├── input-validation.test.ts  # 输入边界测试 (24用例) ← 新增
+├── health.test.ts            # 健康检查测试 (5用例)
+├── input-validation.test.ts  # 输入边界测试 (24用例)
+├── reminder.test.ts          # 提醒通知测试 (21用例) ← 新增
+├── invitation.test.ts        # 邀请码测试 (13用例) ← 新增
+├── achievement.test.ts       # 成就系统测试 (13用例) ← 新增
 └── E2E_TEST_REPORT.md       # 测试报告
 ```
 
@@ -232,6 +300,15 @@ tests/e2e/
 | `/notifications/{id}` | GET | ✅ | 完整 (详情/隔离) |
 | `/notifications/{id}` | POST | ✅ | 完整 (标记已读/隔离) |
 | `/notifications/{id}` | DELETE | ✅ | 完整 (软删除/隔离) |
+| `/reminders` | GET | ✅ | 完整 (列表/排序/隔离) |
+| `/reminders` | POST | ✅ | 完整 (创建/验证) |
+| `/reminders/{id}` | PUT | ✅ | 完整 (更新/验证/隔离) |
+| `/reminders/{id}` | DELETE | ✅ | 完整 (删除/隔离) |
+| `/invitations` | GET | ✅ | 完整 (列表/排序/隔离) |
+| `/invitations/generate` | POST | ✅ | 完整 (生成/唯一性) |
+| `/invitations/redeem` | POST | ✅ | 完整 (兑换/验证/隔离) |
+| `/achievements/activity` | POST | ✅ | 完整 (记录/验证/去重) |
+| `/achievements/stats` | GET | ✅ | 完整 (统计/连续天数/隔离) |
 
 ---
 
@@ -257,7 +334,7 @@ npx playwright test --reporter=html,json
 
 ---
 
-*报告更新: 2026-05-06T14:05*
+*报告更新: 2026-05-06T16:50*
 *测试工程师: tester-e2e*
-*新增测试: health.test.ts (5用例), input-validation.test.ts (24用例)*
-*代码修复: src/notification.ts (空格标题/内容校验)*
+*v2 新增测试: reminder.test.ts (21用例), invitation.test.ts (13用例), achievement.test.ts (13用例)*
+*新增覆盖 API: /reminders, /invitations, /achievements 三组端点*

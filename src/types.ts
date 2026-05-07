@@ -93,3 +93,62 @@ export interface V2WeightStats {
   change: number | null;
   avgWeightDiff: number | null;
 }
+
+// ============ Reminder Types ============
+
+export type ReminderPeriod = 'morning' | 'evening' | 'both';
+
+export interface Reminder {
+  id: string;
+  userId: string;
+  remindTime: string; // HH:MM format
+  period: ReminderPeriod;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateReminderInput {
+  userId: string;
+  remindTime: string;
+  period: ReminderPeriod;
+  enabled?: boolean;
+}
+
+// ============ Invitation Code Types ============
+
+export interface InvitationCode {
+  id: string;
+  code: string;
+  creatorUserId: string;
+  isUsed: boolean;
+  usedByUserId?: string;
+  createdAt: string;
+  usedAt?: string;
+}
+
+export interface RedeemInvitationInput {
+  userId: string;
+  code: string;
+}
+
+// ============ Achievement Types ============
+
+export type ActivityType = 'login' | 'record_weight' | 'check_in';
+
+export interface UserActivity {
+  id: string;
+  userId: string;
+  activityType: ActivityType;
+  date: string;
+  metadata?: string;
+  createdAt: string;
+}
+
+export interface AchievementStats {
+  totalLoginDays: number;
+  consecutiveRecordDays: number;
+  currentStreak: number;
+  longestStreak: number;
+  totalRecords: number;
+}

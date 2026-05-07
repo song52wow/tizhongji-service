@@ -6,8 +6,11 @@ import crypto from 'crypto';
 import './db'; // Ensure .env is loaded and DB is initialized before other modules
 import { upsertWeightRecord, listWeightRecords, getWeightRecordById, deleteWeightRecord, calculateWeightStats } from './weight-record';
 import { createNotification, listNotifications, markAsRead, markAllAsRead, deleteNotification, getNotificationById } from './notification';
+import { createReminder, listReminders, updateReminder, deleteReminder } from './reminder';
+import { generateInvitationCode, redeemInvitationCode, listInvitationCodes } from './invitation';
+import { recordActivity, getAchievementStats } from './achievement';
 import { logger } from './logger';
-import type { CreateWeightRecordInput, WeightRecordQuery, CreateNotificationInput, NotificationListQuery } from './types';
+import type { CreateWeightRecordInput, WeightRecordQuery, CreateNotificationInput, NotificationListQuery, CreateReminderInput, RedeemInvitationInput } from './types';
 
 const envPath = path.join(__dirname, '..', '.env');
 if (fs.existsSync(envPath)) {
@@ -89,7 +92,7 @@ function getAuthenticatedUserId(req: http.IncomingMessage): string | null {
 }
 
 const ALLOWED_ORIGINS = new Set(
-  (process.env.ALLOWED_ORIGINS || 'http://localhost:3000,http://localhost:8080').split(',').map(s => s.trim()).filter(Boolean)
+  (process.env.ALLOWED_ORIGINS || 'http://localhost:3000,http://localhost:8080,https://tizhongji.cisonc.site').split(',').map(s => s.trim()).filter(Boolean)
 );
 
 function getPathSegments(url: string): { path: string[]; query: Record<string, string> } {
@@ -330,6 +333,116 @@ const server = http.createServer(async (req: IncomingMessage, res: ServerRespons
         requestLogger(req, userId, (result as any).statusCode, Date.now() - startMs);
       } else {
         jsonResponse(res, 200, { success: true });
+        requestLogger(req, userId, 200, Date.now() - startMs);
+      }
+      return;
+    }
+
+    // ============ Reminder API ============
+
+    if (path[0] === 'reminders' && path.length === 1 && req.method === 'POST') {
+      const input = await parseBody<CreateReminderInput>(req);
+      const enforcedInput = { ...input, userId };
+      const result = createReminder(enforcedInput);
+      if (typeof result === 'object' && 'success' in result && !result.success) {
+        jsonResponse(res, (result as any).statusCode, result);
+        requestLogger(req, userId, (result as any).statusCode, Date.now() - startMs);
+      } else {
+        jsonResponse(res, 200, result);
+        requestLogger(req, userId, 200, Date.now() - startMs);
+      }
+      return;
+    }
+
+    if (path[0] === 'reminders' && path.length === 1 && req.method === 'GET') {
+      const result = listReminders(userId);
+      jsonResponse(res, 200, { success: true, data: result });
+      requestLogger(req, userId, 200, Date.now() - startMs);
+      return;
+    }
+
+    if (path[0] === 'reminders' && path.length === 2 && req.method === 'PUT') {
+      const updates = await parseBody<{ remindTime?: string; period?: string; enabled?: boolean }>(req);
+      const result = updateReminder(path[1], userId, updates);
+      if (typeof result === 'object' && 'success' in result && !result.success) {
+        jsonResponse(res, (result as any).statusCode, result);
+        requestLogger(req, userId, (result as any).statusCode, Date.now() - startMs);
+      } else {
+        jsonResponse(res, 200, result);
+        requestLogger(req, userId, 200, Date.now() - startMs);
+      }
+      return;
+    }
+
+    if (path[0] === 'reminders' && path.length === 2 && req.method === 'DELETE') {
+      const result = deleteReminder(path[1], userId);
+      if (typeof result === 'object' && 'success' in result && !result.success) {
+        jsonResponse(res, (result as any).statusCode, { success: false, error: (result as any).error });
+        requestLogger(req, userId, (result as any).statusCode, Date.now() - startMs);
+      } else {
+        jsonResponse(res, 200, { success: true });
+        requestLogger(req, userId, 200, Date.now() - startMs);
+      }
+      return;
+    }
+
+    // ============ Invitation Code API ============
+
+    if (path[0] === 'invitations' && path[1] === 'generate' && path.length === 2 && req.method === 'POST') {
+      const result = generateInvitationCode(userId);
+      if (typeof result === 'object' && 'success' in result && !result.success) {
+        jsonResponse(res, (result as any).statusCode, { success: false, error: (result as any).error });
+        requestLogger(req, userId, (result as any).statusCode, Date.now() - startMs);
+      } else {
+        jsonResponse(res, 200, result);
+        requestLogger(req, userId, 200, Date.now() - startMs);
+      }
+      return;
+    }
+
+    if (path[0] === 'invitations' && path[1] === 'redeem' && path.length === 2 && req.method === 'POST') {
+      const input = await parseBody<{ code: string }>(req);
+      const redeemInput: RedeemInvitationInput = { userId, code: input.code };
+      const result = redeemInvitationCode(redeemInput);
+      if (typeof result === 'object' && 'success' in result && !result.success) {
+        jsonResponse(res, (result as any).statusCode, { success: false, error: (result as any).error });
+        requestLogger(req, userId, (result as any).statusCode, Date.now() - startMs);
+      } else {
+        jsonResponse(res, 200, result);
+        requestLogger(req, userId, 200, Date.now() - startMs);
+      }
+      return;
+    }
+
+    if (path[0] === 'invitations' && path.length === 1 && req.method === 'GET') {
+      const result = listInvitationCodes(userId);
+      jsonResponse(res, 200, { success: true, data: result });
+      requestLogger(req, userId, 200, Date.now() - startMs);
+      return;
+    }
+
+    // ============ Achievement API ============
+
+    if (path[0] === 'achievements' && path[1] === 'activity' && path.length === 2 && req.method === 'POST') {
+      const input = await parseBody<{ activityType: string; date: string; metadata?: string }>(req);
+      const result = recordActivity(userId, input.activityType as any, input.date, input.metadata);
+      if (typeof result === 'object' && 'success' in result && !result.success) {
+        jsonResponse(res, (result as any).statusCode, { success: false, error: (result as any).error });
+        requestLogger(req, userId, (result as any).statusCode, Date.now() - startMs);
+      } else {
+        jsonResponse(res, 200, result);
+        requestLogger(req, userId, 200, Date.now() - startMs);
+      }
+      return;
+    }
+
+    if (path[0] === 'achievements' && path[1] === 'stats' && path.length === 2 && req.method === 'GET') {
+      const result = getAchievementStats(userId);
+      if (typeof result === 'object' && 'success' in result && !result.success) {
+        jsonResponse(res, (result as any).statusCode, { success: false, error: (result as any).error });
+        requestLogger(req, userId, (result as any).statusCode, Date.now() - startMs);
+      } else {
+        jsonResponse(res, 200, { success: true, data: result });
         requestLogger(req, userId, 200, Date.now() - startMs);
       }
       return;

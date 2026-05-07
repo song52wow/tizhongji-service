@@ -1,5 +1,4 @@
 node_modules/
-dist/
 *.db
 *.db-shm
 *.db-wal
@@ -10,3 +9,12 @@ logs/
 .DS_Store
 *.tgz
 data/
+.github/
+*.md
+tests/
+*.test.ts
+docker-compose.yml
+Dockerfile
+.dockerignore
+ecosystem.config.js
+tsconfig.json
