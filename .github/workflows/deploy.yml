@@ -7,7 +7,7 @@ on:
 
 env:
   ACR_REGISTRY: crpi-df6i5zrps8a8t6ig.cn-shenzhen.personal.cr.aliyuncs.com
-  IMAGE_NAME: tizhongji-service
+  IMAGE_NAME: song52wow/tizhongji-service
 
 jobs:
   build-and-push:
